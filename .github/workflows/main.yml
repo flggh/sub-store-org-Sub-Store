@@ -11,6 +11,10 @@ on:
       - master
     paths:
       - "backend/package.json"
+
+permissions:
+  contents: write
+  
 jobs:
   build:
     runs-on: ubuntu-latest

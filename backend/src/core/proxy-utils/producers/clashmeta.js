@@ -1,4 +1,5 @@
 import { isPresent } from '@/core/proxy-utils/producers/utils';
+import YAML from '@/utils/yaml';
 
 const ipVersions = {
     dual: 'dual',
@@ -298,10 +299,7 @@ export default function ClashMeta_Producer() {
 
         return type === 'internal'
             ? list
-            : 'proxies:\n' +
-                  list
-                      .map((proxy) => '  - ' + JSON.stringify(proxy) + '\n')
-                      .join('');
+            : YAML.safeDump({ proxies: list }, { lineWidth: -1 });
     };
     return { type, produce };
 }
