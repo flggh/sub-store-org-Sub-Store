@@ -66,6 +66,7 @@ export function shouldIncludeUnsupportedProxy(platform, headers) {
         const { UA, ua, accept } = getUserAgentFromHeaders(headers);
         const target = getPlatformFromUserAgent({ UA, ua, accept });
         const coerceVersion = coerce(ua);
+        if (!coerceVersion) return false;
         const { major } = coerceVersion;
         if (
             (['SurgeMac', 'Surge'].includes(platform) &&

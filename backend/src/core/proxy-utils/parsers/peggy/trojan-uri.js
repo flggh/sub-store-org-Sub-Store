@@ -49,7 +49,7 @@ password = match:$[^@]+ {
 
 server = ip/domain;
 
-domain = match:[0-9a-zA-z-_.]+ { 
+domain = match:[0-9a-zA-Z-_.]+ {
   const domain = match.join(""); 
   if (/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]/.test(domain)) {
     return domain;
@@ -81,12 +81,12 @@ port = digits:[0-9]+ {
 
 params = "?" head:param tail:("&"@param)* {
   for (const [key, value] of Object.entries(params)) {
-    params[key] = decodeURIComponent(value);
+    params[key] = value == null ? value : decodeURIComponent(value);
   }
   proxy["skip-cert-verify"] = toBool(params["allowInsecure"]);
   proxy.sni = params["sni"] || params["peer"];
   proxy['client-fingerprint'] = params.fp;
-  proxy.alpn = params.alpn ? decodeURIComponent(params.alpn).split(',') : undefined;
+  proxy.alpn = params.alpn ? params.alpn.split(',') : undefined;
 
   if (toBool(params["ws"])) {
     proxy.network = "ws";
@@ -108,10 +108,10 @@ params = "?" head:param tail:("&"@param)* {
         };
     } else {
       if (params["path"]) {
-        $set(proxy, proxy.network+"-opts.path", decodeURIComponent(params["path"]));  
+        $set(proxy, proxy.network+"-opts.path", params["path"]);  
       }
       if (params["host"]) {
-        $set(proxy, proxy.network+"-opts.headers.Host", decodeURIComponent(params["host"])); 
+        $set(proxy, proxy.network+"-opts.headers.Host", params["host"]); 
       }
       if (httpupgrade) {
         $set(proxy, proxy.network+"-opts.v2ray-http-upgrade", true); 

@@ -6,7 +6,7 @@ function QXFilter() {
         // skip unsupported rules
         const UNSUPPORTED = [
             'URL-REGEX',
-            'DEST-PORT',
+            'DST-PORT',
             'SRC-IP',
             'IN-PORT',
             'PROTOCOL',

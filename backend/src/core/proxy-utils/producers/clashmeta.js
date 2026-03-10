@@ -208,7 +208,7 @@ export default function ClashMeta_Producer() {
                     }
                     let host = proxy['h2-opts']?.headers?.host;
                     if (
-                        isPresent(proxy, 'h2-opts.headers.Host') &&
+                        isPresent(proxy, 'h2-opts.headers.host') &&
                         !Array.isArray(host)
                     ) {
                         proxy['h2-opts'].headers.host = [host];

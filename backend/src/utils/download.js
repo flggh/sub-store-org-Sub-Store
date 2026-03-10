@@ -20,6 +20,11 @@ const clashPreprocessor = PROXY_PREPROCESSORS.find(
     (processor) => processor.name === 'Clash Pre-processor',
 );
 
+import {
+    safeDecodeURIComponent,
+    parseBooleanStyleArgs,
+} from '@/utils/parse';
+
 const tasks = new Map();
 
 export default async function download(
@@ -41,15 +46,7 @@ export default async function download(
             // 支持 `#${encodeURIComponent(JSON.stringify({arg1: "1"}))}`
             $arguments = JSON.parse(decodeURIComponent(rawArgs[1]));
         } catch (e) {
-            for (const pair of rawArgs[1].split('&')) {
-                const key = pair.split('=')[0];
-                const value = pair.split('=')[1];
-                // 部分兼容之前的逻辑 const value = pair.split('=')[1] || true;
-                $arguments[key] =
-                    value == null || value === ''
-                        ? true
-                        : decodeURIComponent(value);
-            }
+            $arguments = parseBooleanStyleArgs(rawArgs[1]);
         }
     }
     const { isNode, isStash, isLoon, isShadowRocket, isQX } = ENV();
@@ -58,7 +55,7 @@ export default async function download(
         defaultUserAgent,
         defaultTimeout,
         cacheThreshold: defaultCacheThreshold,
-    } = $.read(SETTINGS_KEY);
+    } = $.read(SETTINGS_KEY) || {};
     const cacheThreshold = defaultCacheThreshold || 1024;
     let proxy = customProxy || defaultProxy;
     if ($.env.isNode) {
@@ -168,9 +165,9 @@ export default async function download(
             if (name == null) {
                 throw new Error(`本地 ${type} URL 无效: ${url}`);
             }
-            name = decodeURIComponent(name);
+            name = safeDecodeURIComponent(name);
             const key = type === 'module' ? MODULES_KEY : FILES_KEY;
-            const item = findByName($.read(key), name);
+            const item = findByName($.read(key) || [], name);
             if (!item) {
                 throw new Error(`找不到 ${type}: ${name}`);
             }
@@ -269,7 +266,7 @@ export default async function download(
                 }
             }
             if (body.replace(/\s/g, '').length === 0)
-                throw new Error(new Error('远程资源内容为空'));
+                throw new Error('远程资源内容为空');
             if (preprocess) {
                 try {
                     if (clashPreprocessor.test(body)) {
@@ -364,7 +361,7 @@ export async function downloadFile(url, file) {
         dispatcher: new Agent().compose(
             interceptors.redirect({
                 maxRedirections: 3,
-                throwOnRedirect: true,
+                throwOnMaxRedirects: true,
             }),
         ),
     });

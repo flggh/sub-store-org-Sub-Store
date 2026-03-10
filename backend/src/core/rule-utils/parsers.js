@@ -25,7 +25,7 @@ function AllRuleParser() {
             // skip empty line
             if (line.length === 0) continue;
             // skip comments
-            if (/\s*#/.test(line)) continue;
+            if (/^\s*#/.test(line)) continue;
             try {
                 const params = line.split(',').map((w) => w.trim());
                 let rawType = params[0];

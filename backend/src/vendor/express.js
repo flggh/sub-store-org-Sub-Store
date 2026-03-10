@@ -1,5 +1,9 @@
 /* eslint-disable no-undef */
 import { ENV } from './open-api';
+import {
+    splitKeyValuePair,
+    safeDecodeURIComponent,
+} from '@/utils/parse';
 
 export default function express({ substore: $, port, host }) {
     const { isNode } = ENV();
@@ -96,7 +100,7 @@ export default function express({ substore: $, port, host }) {
         'DELETE',
         'PATCH',
         'OPTIONS',
-        "HEAD'",
+        "HEAD",
         'ALL',
     ];
 
@@ -105,7 +109,11 @@ export default function express({ substore: $, port, host }) {
         let { method, url, headers, body } = request;
         headers = formatHeaders(headers);
         if (/json/i.test(headers['content-type'])) {
-            body = JSON.parse(body);
+            try {
+                body = JSON.parse(body);
+            } catch (e) {
+                // body 保持原始字符串
+            }
         }
 
         method = method.toUpperCase();
@@ -113,14 +121,15 @@ export default function express({ substore: $, port, host }) {
 
         // pattern match
         let handler = null;
-        let i;
+        let handlerIndex = -1;
         let longestMatchedPattern = 0;
-        for (i = start; i < handlers.length; i++) {
+        for (let i = start; i < handlers.length; i++) {
             if (handlers[i].method === 'ALL' || method === handlers[i].method) {
                 const { pattern } = handlers[i];
                 if (patternMatched(pattern, path)) {
                     if (pattern.split('/').length > longestMatchedPattern) {
                         handler = handlers[i];
+                        handlerIndex = i;
                         longestMatchedPattern = pattern.split('/').length;
                     }
                 }
@@ -129,7 +138,7 @@ export default function express({ substore: $, port, host }) {
         if (handler) {
             // dispatch to next handler
             const next = () => {
-                dispatch(method, url, i);
+                dispatch({ method, url, headers, body }, handlerIndex + 1);
             };
             const req = {
                 method,
@@ -211,7 +220,7 @@ export default function express({ substore: $, port, host }) {
     function Response() {
         let statusCode = 200;
         const { isQX, isLoon, isSurge, isGUIforCores } = ENV();
-        const headers = DEFAULT_HEADERS;
+        const headers = { ...DEFAULT_HEADERS };
         const STATUS_CODE_MAP = {
             200: 'HTTP/1.1 200 OK',
             201: 'HTTP/1.1 201 Created',
@@ -312,8 +321,12 @@ function extractURL(url) {
     if (split !== -1) {
         let hashes = url.slice(url.indexOf('?') + 1).split('&');
         for (let i = 0; i < hashes.length; i++) {
-            const hash = hashes[i].split('=');
-            query[hash[0]] = decodeURIComponent(hash[1]);
+            if (!hashes[i]) continue;
+            const [key, value] = splitKeyValuePair(hashes[i]);
+            query[key] =
+                value == null || value === ''
+                    ? true
+                    : safeDecodeURIComponent(value);
         }
     }
     return {
@@ -337,7 +350,7 @@ function extractPathParams(pattern, path) {
                 while (path[j] !== '/' && j < path.length) {
                     val.push(path[j++]);
                 }
-                params[key.join('')] = decodeURIComponent(val.join(''));
+                params[key.join('')] = safeDecodeURIComponent(val.join(''));
             } else {
                 if (pattern[i] !== path[j]) {
                     return null;

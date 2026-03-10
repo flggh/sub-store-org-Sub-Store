@@ -3,6 +3,7 @@ import { ProxyUtils } from '@/core/proxy-utils';
 import { RuleUtils } from '@/core/rule-utils';
 import { version } from '../../package.json';
 import download from '@/utils/download';
+import { parseArgumentString } from '@/utils/parse';
 
 let result = '';
 let resource = typeof $resource !== 'undefined' ? $resource : '';
@@ -22,9 +23,7 @@ let resourceUrl = typeof $resourceUrl !== 'undefined' ? $resourceUrl : '';
     const build = $loon.match(/\((\d+)\)$/)?.[1];
     let arg;
     if (typeof $argument != 'undefined') {
-        arg = Object.fromEntries(
-            $argument.split('&').map((item) => item.split('=')),
-        );
+        arg = parseArgumentString($argument);
     } else {
         arg = {};
     }

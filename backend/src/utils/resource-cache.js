@@ -11,7 +11,12 @@ class ResourceCache {
             $.write('{}', RESOURCE_CACHE_KEY);
         }
         try {
-            this.resourceCache = JSON.parse($.read(RESOURCE_CACHE_KEY));
+            const parsed = JSON.parse($.read(RESOURCE_CACHE_KEY));
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                this.resourceCache = parsed;
+            } else {
+                throw new Error('Invalid cache payload');
+            }
         } catch (e) {
             $.error(
                 `解析持久化缓存中的 ${RESOURCE_CACHE_KEY} 失败, 重置为 {}, 错误: ${
@@ -89,7 +94,7 @@ function normalizeTTL(ttl) {
 }
 
 function getTTL() {
-    const settings = $.read(SETTINGS_KEY);
+    const settings = $.read(SETTINGS_KEY) || {};
     let ttl = settings?.resourceCacheTtl;
     if (ttl) {
         ttl = Number(ttl);

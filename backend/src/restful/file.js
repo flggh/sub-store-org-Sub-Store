@@ -10,6 +10,7 @@ import {
 } from '@/restful/errors';
 import { produceArtifact } from '@/restful/sync';
 import { formatDateTime } from '@/utils';
+import { parseBooleanStyleArgs } from '@/utils/parse';
 
 export default function register($app) {
     if (!$.read(FILES_KEY)) $.write([], FILES_KEY);
@@ -32,7 +33,7 @@ function createFile(req, res) {
     const file = req.body;
     file.name = `${file.name ?? Date.now()}`;
     $.info(`正在创建文件：${file.name}`);
-    const allFiles = $.read(FILES_KEY);
+    const allFiles = $.read(FILES_KEY) || [];
     if (findByName(allFiles, file.name)) {
         return failed(
             res,
@@ -82,15 +83,7 @@ async function getFile(req, res, next) {
             // 支持 `#${encodeURIComponent(JSON.stringify({arg1: "1"}))}`
             options = JSON.parse(decodeURIComponent(req.query.$options));
         } catch (e) {
-            for (const pair of req.query.$options.split('&')) {
-                const key = pair.split('=')[0];
-                const value = pair.split('=')[1];
-                // 部分兼容之前的逻辑 const value = pair.split('=')[1] || true;
-                options[key] =
-                    value == null || value === ''
-                        ? true
-                        : decodeURIComponent(value);
-            }
+            options = parseBooleanStyleArgs(req.query.$options);
         }
         $.info(`传入 $options: ${JSON.stringify(options)}`);
         Object.assign($options, options);
@@ -126,7 +119,7 @@ async function getFile(req, res, next) {
         $.info(`指定生产类型: ${produceType}`);
     }
 
-    const allFiles = $.read(FILES_KEY);
+    const allFiles = $.read(FILES_KEY) || [];
     const file = findByName(allFiles, name);
     if (file) {
         try {
@@ -236,7 +229,7 @@ async function getFile(req, res, next) {
 function getWholeFile(req, res) {
     let { name } = req.params;
     let { raw } = req.query;
-    const allFiles = $.read(FILES_KEY);
+    const allFiles = $.read(FILES_KEY) || [];
     const file = findByName(allFiles, name);
     if (file) {
         if (raw) {
@@ -268,7 +261,7 @@ function getWholeFile(req, res) {
 function updateFile(req, res) {
     let { name } = req.params;
     let file = req.body;
-    const allFiles = $.read(FILES_KEY);
+    const allFiles = $.read(FILES_KEY) || [];
     const oldFile = findByName(allFiles, name);
     if (oldFile) {
         if (!file.name) file.name = oldFile.name;
@@ -310,14 +303,14 @@ function updateFile(req, res) {
 function deleteFile(req, res) {
     let { name } = req.params;
     $.info(`正在删除文件：${name}`);
-    let allFiles = $.read(FILES_KEY);
+    let allFiles = $.read(FILES_KEY) || [];
     deleteByName(allFiles, name);
     $.write(allFiles, FILES_KEY);
     success(res);
 }
 
 function getAllFiles(req, res) {
-    const allFiles = $.read(FILES_KEY);
+    const allFiles = $.read(FILES_KEY) || [];
     success(
         res, // eslint-disable-next-line no-unused-vars
         allFiles.map(({ content, ...rest }) => rest),
@@ -325,12 +318,13 @@ function getAllFiles(req, res) {
 }
 
 function getAllWholeFiles(req, res) {
-    const allFiles = $.read(FILES_KEY);
+    const allFiles = $.read(FILES_KEY) || [];
     success(res, allFiles);
 }
 
 function replaceFile(req, res) {
     const allFiles = req.body;
+    if (!Array.isArray(allFiles)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
     $.write(allFiles, FILES_KEY);
     success(res);
 }

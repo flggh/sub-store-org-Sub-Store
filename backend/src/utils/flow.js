@@ -4,6 +4,10 @@ import { hex_md5 } from '@/vendor/md5';
 import { getPolicyDescriptor } from '@/utils';
 import $ from '@/core/app';
 import headersResourceCache from '@/utils/headers-resource-cache';
+import {
+    safeDecodeURIComponent,
+    parseBooleanStyleArgs,
+} from '@/utils/parse';
 
 export function getFlowField(headers) {
     const keys = Object.keys(headers);
@@ -41,15 +45,7 @@ export async function getFlowHeaders(
             // 支持 `#${encodeURIComponent(JSON.stringify({arg1: "1"}))}`
             $arguments = JSON.parse(decodeURIComponent(rawArgs[1]));
         } catch (e) {
-            for (const pair of rawArgs[1].split('&')) {
-                const key = pair.split('=')[0];
-                const value = pair.split('=')[1];
-                // 部分兼容之前的逻辑 const value = pair.split('=')[1] || true;
-                $arguments[key] =
-                    value == null || value === ''
-                        ? true
-                        : decodeURIComponent(value);
-            }
+            $arguments = parseBooleanStyleArgs(rawArgs[1]);
         }
     }
     if ($arguments?.noFlow || !/^https?/.test(url)) {
@@ -62,7 +58,7 @@ export async function getFlowHeaders(
             : { insecure: true }
         : undefined;
     const { defaultProxy, defaultFlowUserAgent, defaultTimeout } =
-        $.read(SETTINGS_KEY);
+        $.read(SETTINGS_KEY) || {};
     let proxy = customProxy || defaultProxy;
     if ($.env.isNode) {
         proxy = proxy || eval('process.env.SUB_STORE_BACKEND_DEFAULT_PROXY');
@@ -190,36 +186,46 @@ export async function getFlowHeaders(
                 );
             }
             if (!flowInfo) {
-                $.info(
-                    `使用 GET 方法获取流量信息: ${url}, User-Agent: ${
-                        userAgent || ''
-                    }, Insecure: ${!!insecure}, Proxy: ${proxy}`,
-                );
-                const { headers } = await http.get({
-                    url: url
-                        .split(/[\r\n]+/)
-                        .map((i) => i.trim())
-                        .filter((i) => i.length)[0],
-                    headers: {
-                        'User-Agent': userAgent,
-                        ...(isStash && proxy
-                            ? {
-                                  'X-Stash-Selected-Proxy':
-                                      encodeURIComponent(proxy),
-                              }
-                            : {}),
-                        ...(isShadowRocket && proxy
-                            ? { 'X-Surge-Policy': proxy }
-                            : {}),
-                    },
-                    timeout: requestTimeout,
-                    ...(proxy ? { proxy } : {}),
-                    ...(isLoon && proxy ? { node: proxy } : {}),
-                    ...(isQX && proxy ? { opts: { policy: proxy } } : {}),
-                    ...(proxy ? getPolicyDescriptor(proxy) : {}),
-                    ...(insecure ? insecure : {}),
-                });
-                flowInfo = getFlowField(headers);
+                try {
+                    $.info(
+                        `使用 GET 方法获取流量信息: ${url}, User-Agent: ${
+                            userAgent || ''
+                        }, Insecure: ${!!insecure}, Proxy: ${proxy}`,
+                    );
+                    const { headers } = await http.get({
+                        url: url
+                            .split(/[\r\n]+/)
+                            .map((i) => i.trim())
+                            .filter((i) => i.length)[0],
+                        headers: {
+                            'User-Agent': userAgent,
+                            ...(isStash && proxy
+                                ? {
+                                      'X-Stash-Selected-Proxy':
+                                          encodeURIComponent(proxy),
+                                  }
+                                : {}),
+                            ...(isShadowRocket && proxy
+                                ? { 'X-Surge-Policy': proxy }
+                                : {}),
+                        },
+                        timeout: requestTimeout,
+                        ...(proxy ? { proxy } : {}),
+                        ...(isLoon && proxy ? { node: proxy } : {}),
+                        ...(isQX && proxy ? { opts: { policy: proxy } } : {}),
+                        ...(proxy ? getPolicyDescriptor(proxy) : {}),
+                        ...(insecure ? insecure : {}),
+                    });
+                    flowInfo = getFlowField(headers);
+                } catch (e) {
+                    $.error(
+                        `使用 GET 方法获取流量信息失败: ${url}, User-Agent: ${
+                            userAgent || ''
+                        }, Insecure: ${!!insecure}, Proxy: ${proxy}: ${
+                            e.message ?? e
+                        }`,
+                    );
+                }
             }
         }
         if (flowInfo) {
@@ -244,11 +250,13 @@ export function parseFlowHeaders(flowHeaders) {
     const downloadMatch = flowHeaders.match(
         /download=([-+]?)([0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)/,
     );
-    const download = Number(downloadMatch[1] + downloadMatch[2]);
+    const download =
+        downloadMatch == null ? 0 : Number(downloadMatch[1] + downloadMatch[2]);
     const totalMatch = flowHeaders.match(
         /total=([-+]?)([0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)/,
     );
-    const total = Number(totalMatch[1] + totalMatch[2]);
+    const total =
+        totalMatch == null ? 0 : Number(totalMatch[1] + totalMatch[2]);
 
     // optional expire timestamp
     const expireMatch = flowHeaders.match(
@@ -264,11 +272,13 @@ export function parseFlowHeaders(flowHeaders) {
         : undefined;
 
     const appUrlMatch = flowHeaders.match(/app_url=(.*?)\s*?(;|$)/);
-    const appUrl = appUrlMatch ? decodeURIComponent(appUrlMatch[1]) : undefined;
+    const appUrl = appUrlMatch
+        ? safeDecodeURIComponent(appUrlMatch[1])
+        : undefined;
 
     const planNameMatch = flowHeaders.match(/plan_name=(.*?)\s*?(;|$)/);
     const planName = planNameMatch
-        ? decodeURIComponent(planNameMatch[1])
+        ? safeDecodeURIComponent(planNameMatch[1])
         : undefined;
 
     return {

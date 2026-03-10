@@ -31,13 +31,29 @@ function parseSocks5Uri(uri) {
         $.error(`port is not present in line: ${uri}`);
         throw new Error(`port is not present in line: ${uri}`);
     }
+    let userId;
+    if (username != null) {
+        try {
+            userId = decodeURIComponent(username);
+        } catch {
+            userId = username;
+        }
+    }
+    let passwordValue;
+    if (password != null) {
+        try {
+            passwordValue = decodeURIComponent(password);
+        } catch {
+            passwordValue = password;
+        }
+    }
     return {
         type: 5,
         host: server,
         port,
 
-        userId: username != null ? decodeURIComponent(username) : undefined,
-        password: password != null ? decodeURIComponent(password) : undefined,
+        userId,
+        password: passwordValue,
     };
 }
 export class OpenAPI {
@@ -168,13 +184,11 @@ export class OpenAPI {
                 `${basePath}/${this.name}.json`,
                 data,
                 { flag: 'w' },
-                (err) => console.log(err),
             );
             this.node.fs.writeFileSync(
                 `${basePath}/root.json`,
                 JSON.stringify(this.root, null, 2),
                 { flag: 'w' },
-                (err) => console.log(err),
             );
         }
     }

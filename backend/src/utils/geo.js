@@ -61,7 +61,7 @@ const ISOFlags = {
     '🇯🇵': ['JP', 'JPN', 'TYO'],
     '🇰🇪': ['KE', 'KEN'],
     '🇰🇬': ['KG', 'KGZ'],
-    '🇰🇭': ['KH', 'KGZ'],
+    '🇰🇭': ['KH', 'KHM'],
     '🇰🇵': ['KP', 'PRK'],
     '🇰🇷': ['KR', 'KOR', 'SEL'],
     '🇰🇿': ['KZ', 'KAZ'],

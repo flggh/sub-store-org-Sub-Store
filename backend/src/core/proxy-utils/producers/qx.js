@@ -99,27 +99,23 @@ function shadowsocks(proxy) {
         proxy.tls = true;
     }
     if (isPresent(proxy, 'plugin')) {
+        if (!proxy['plugin-opts']) {
+            throw new Error(`plugin ${proxy.plugin} requires plugin-opts`);
+        }
+        const opts = proxy['plugin-opts'];
         if (proxy.plugin === 'obfs') {
-            const opts = proxy['plugin-opts'];
             append(`,obfs=${opts.mode}`);
         } else if (
             proxy.plugin === 'v2ray-plugin' &&
-            proxy['plugin-opts'].mode === 'websocket'
+            opts.mode === 'websocket'
         ) {
-            const opts = proxy['plugin-opts'];
             if (opts.tls) append(`,obfs=wss`);
             else append(`,obfs=ws`);
         } else {
             throw new Error(`plugin is not supported`);
         }
-        appendIfPresent(
-            `,obfs-host=${proxy['plugin-opts'].host}`,
-            'plugin-opts.host',
-        );
-        appendIfPresent(
-            `,obfs-uri=${proxy['plugin-opts'].path}`,
-            'plugin-opts.path',
-        );
+        appendIfPresent(`,obfs-host=${opts.host}`, 'plugin-opts.host');
+        appendIfPresent(`,obfs-uri=${opts.path}`, 'plugin-opts.path');
     }
 
     if (needTls(proxy)) {
@@ -324,15 +320,18 @@ function vmess(proxy) {
         if (proxy.network === 'ws') {
             if (proxy.tls) append(`,obfs=wss`);
             else append(`,obfs=ws`);
-        } else if (proxy.network === 'http') {
+        } else if (['http', 'h2'].includes(proxy.network)) {
             append(`,obfs=http`);
         } else if (['tcp'].includes(proxy.network)) {
             if (proxy.tls) append(`,obfs=over-tls`);
-        } else if (!['tcp'].includes(proxy.network)) {
+        } else if (!['tcp', 'http', 'h2'].includes(proxy.network)) {
             throw new Error(`network ${proxy.network} is unsupported`);
         }
         let transportPath = proxy[`${proxy.network}-opts`]?.path;
-        let transportHost = proxy[`${proxy.network}-opts`]?.headers?.Host;
+        let transportHost =
+            proxy[`${proxy.network}-opts`]?.headers?.[
+                proxy.network === 'h2' ? 'host' : 'Host'
+            ];
         appendIfPresent(
             `,obfs-uri=${
                 Array.isArray(transportPath) ? transportPath[0] : transportPath
@@ -343,7 +342,9 @@ function vmess(proxy) {
             `,obfs-host=${
                 Array.isArray(transportHost) ? transportHost[0] : transportHost
             }`,
-            `${proxy.network}-opts.headers.Host`,
+            `${proxy.network}-opts.headers.${
+                proxy.network === 'h2' ? 'host' : 'Host'
+            }`,
         );
     } else {
         // over-tls
@@ -430,15 +431,18 @@ function vless(proxy) {
         if (proxy.network === 'ws') {
             if (proxy.tls) append(`,obfs=wss`);
             else append(`,obfs=ws`);
-        } else if (proxy.network === 'http') {
+        } else if (['http', 'h2'].includes(proxy.network)) {
             append(`,obfs=http`);
         } else if (['tcp'].includes(proxy.network)) {
             if (proxy.tls) append(`,obfs=over-tls`);
-        } else if (!['tcp'].includes(proxy.network)) {
+        } else if (!['tcp', 'http', 'h2'].includes(proxy.network)) {
             throw new Error(`network ${proxy.network} is unsupported`);
         }
         let transportPath = proxy[`${proxy.network}-opts`]?.path;
-        let transportHost = proxy[`${proxy.network}-opts`]?.headers?.Host;
+        let transportHost =
+            proxy[`${proxy.network}-opts`]?.headers?.[
+                proxy.network === 'h2' ? 'host' : 'Host'
+            ];
         appendIfPresent(
             `,obfs-uri=${
                 Array.isArray(transportPath) ? transportPath[0] : transportPath
@@ -449,7 +453,9 @@ function vless(proxy) {
             `,obfs-host=${
                 Array.isArray(transportHost) ? transportHost[0] : transportHost
             }`,
-            `${proxy.network}-opts.headers.Host`,
+            `${proxy.network}-opts.headers.${
+                proxy.network === 'h2' ? 'host' : 'Host'
+            }`,
         );
     } else {
         // over-tls

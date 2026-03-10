@@ -14,6 +14,7 @@ import { produceArtifact } from '@/restful/sync';
 import { isIPv4, isIPv6 } from '@/utils';
 import { getISO } from '@/utils/geo';
 import env from '@/utils/env';
+import { parseBooleanStyleArgs } from '@/utils/parse';
 
 export default function register($app) {
     $app.get('/share/col/:name/:target', async (req, res) => {
@@ -128,15 +129,7 @@ async function downloadSubscription(req, res) {
             // 支持 `#${encodeURIComponent(JSON.stringify({arg1: "1"}))}`
             options = JSON.parse(decodeURIComponent(req.query.$options));
         } catch (e) {
-            for (const pair of req.query.$options.split('&')) {
-                const key = pair.split('=')[0];
-                const value = pair.split('=')[1];
-                // 部分兼容之前的逻辑 const value = pair.split('=')[1] || true;
-                options[key] =
-                    value == null || value === ''
-                        ? true
-                        : decodeURIComponent(value);
-            }
+            options = parseBooleanStyleArgs(req.query.$options);
         }
         $.info(`传入 $options: ${JSON.stringify(options)}`);
         Object.assign($options, options);
@@ -191,7 +184,7 @@ async function downloadSubscription(req, res) {
         $.info(`指定不使用缓存: ${noCache}`);
     }
 
-    const allSubs = $.read(SUBS_KEY);
+    const allSubs = $.read(SUBS_KEY) || [];
     const fakeSub = {
         name: 'fakeNodeInfo',
         source: 'local',
@@ -239,7 +232,7 @@ async function downloadSubscription(req, res) {
             ) {
                 try {
                     url =
-                        `${url || sub.url}`
+                        `${url || sub.url || ''}`
                             .split(/[\r\n]+/)
                             .map((i) => i.trim())
                             .filter((i) => i.length)?.[0] || '';
@@ -254,15 +247,7 @@ async function downloadSubscription(req, res) {
                                 decodeURIComponent(rawArgs[1]),
                             );
                         } catch (e) {
-                            for (const pair of rawArgs[1].split('&')) {
-                                const key = pair.split('=')[0];
-                                const value = pair.split('=')[1];
-                                // 部分兼容之前的逻辑 const value = pair.split('=')[1] || true;
-                                $arguments[key] =
-                                    value == null || value === ''
-                                        ? true
-                                        : decodeURIComponent(value);
-                            }
+                            $arguments = parseBooleanStyleArgs(rawArgs[1]);
                         }
                     }
                     if (!$arguments.noFlow && /^https?/.test(url)) {
@@ -351,6 +336,11 @@ async function downloadSubscription(req, res) {
                     nezhaIndex = /^\d+$/.test(nezhaIndex)
                         ? parseInt(nezhaIndex, 10)
                         : output.findIndex((i) => i.name === nezhaIndex);
+                    if (nezhaIndex < 0 || nezhaIndex >= output.length) {
+                        throw new Error(
+                            `nezha-monitor: proxy index ${nezhaIndex} out of range`,
+                        );
+                    }
                     output = await nezhaMonitor(
                         output[nezhaIndex],
                         nezhaIndex,
@@ -413,7 +403,7 @@ async function downloadCollection(req, res) {
     const platform =
         req.query.target || getPlatformFromHeaders(req.headers) || 'JSON';
 
-    const allCols = $.read(COLLECTIONS_KEY);
+    const allCols = $.read(COLLECTIONS_KEY) || [];
     const collection = findByName(allCols, name);
     const reqUA = req.headers['user-agent'] || req.headers['User-Agent'];
     $.info(
@@ -446,15 +436,7 @@ async function downloadCollection(req, res) {
             // 支持 `#${encodeURIComponent(JSON.stringify({arg1: "1"}))}`
             options = JSON.parse(decodeURIComponent(req.query.$options));
         } catch (e) {
-            for (const pair of req.query.$options.split('&')) {
-                const key = pair.split('=')[0];
-                const value = pair.split('=')[1];
-                // 部分兼容之前的逻辑 const value = pair.split('=')[1] || true;
-                options[key] =
-                    value == null || value === ''
-                        ? true
-                        : decodeURIComponent(value);
-            }
+            options = parseBooleanStyleArgs(req.query.$options);
         }
         $.info(`传入 $options: ${JSON.stringify(options)}`);
         Object.assign($options, options);
@@ -511,17 +493,20 @@ async function downloadCollection(req, res) {
             });
             let subUserInfoOfSub;
             // forward flow header from the first subscription in this collection
-            const allSubs = $.read(SUBS_KEY);
-            const subnames = collection.subscriptions;
+            const allSubs = $.read(SUBS_KEY) || [];
+            const subnames = Array.isArray(collection.subscriptions)
+                ? collection.subscriptions
+                : [];
             if (subnames.length > 0) {
                 const sub = findByName(allSubs, subnames[0]);
                 if (
-                    sub.source !== 'local' ||
-                    ['localFirst', 'remoteFirst'].includes(sub.mergeSources)
+                    sub &&
+                    (sub.source !== 'local' ||
+                    ['localFirst', 'remoteFirst'].includes(sub.mergeSources))
                 ) {
                     try {
                         let url =
-                            `${sub.url}`
+                            `${sub.url || ''}`
                                 .split(/[\r\n]+/)
                                 .map((i) => i.trim())
                                 .filter((i) => i.length)?.[0] || '';
@@ -536,15 +521,7 @@ async function downloadCollection(req, res) {
                                     decodeURIComponent(rawArgs[1]),
                                 );
                             } catch (e) {
-                                for (const pair of rawArgs[1].split('&')) {
-                                    const key = pair.split('=')[0];
-                                    const value = pair.split('=')[1];
-                                    // 部分兼容之前的逻辑 const value = pair.split('=')[1] || true;
-                                    $arguments[key] =
-                                        value == null || value === ''
-                                            ? true
-                                            : decodeURIComponent(value);
-                                }
+                                $arguments = parseBooleanStyleArgs(rawArgs[1]);
                             }
                         }
                         if (!$arguments.noFlow && /^https?:/.test(url)) {
@@ -641,6 +618,11 @@ async function downloadCollection(req, res) {
                     nezhaIndex = /^\d+$/.test(nezhaIndex)
                         ? parseInt(nezhaIndex, 10)
                         : output.findIndex((i) => i.name === nezhaIndex);
+                    if (nezhaIndex < 0 || nezhaIndex >= output.length) {
+                        throw new Error(
+                            `nezha-monitor: proxy index ${nezhaIndex} out of range`,
+                        );
+                    }
                     output = await nezhaMonitor(
                         output[nezhaIndex],
                         nezhaIndex,

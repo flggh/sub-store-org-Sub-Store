@@ -70,13 +70,15 @@ const smuxParser = (smux, proxy) => {
 
 const wsParser = (proxy, parsedProxy) => {
     const transport = { type: 'ws', headers: {} };
-    if (proxy['ws-opts']) {
+    const wsOptions = isPlainObject(proxy['ws-opts']) ? proxy['ws-opts'] : {};
+    if (Object.keys(wsOptions).length > 0) {
         const {
             path: wsPath = '',
-            headers: wsHeaders = {},
+            headers: rawWsHeaders = {},
             'max-early-data': max_early_data,
             'early-data-header-name': early_data_header_name,
-        } = proxy['ws-opts'];
+        } = wsOptions;
+        const wsHeaders = isPlainObject(rawWsHeaders) ? rawWsHeaders : {};
         transport.early_data_header_name = early_data_header_name;
         transport.max_early_data = max_early_data
             ? parseInt(max_early_data, 10)
@@ -91,16 +93,17 @@ const wsParser = (proxy, parsedProxy) => {
                 if (value.length > 0) headers[key] = value;
             }
             const { Host: wsHost } = headers;
-            if (wsHost.length === 1)
+            if (wsHost?.length === 1)
                 for (const item of `Host:${wsHost[0]}`.split('\n')) {
-                    const [key, value] = item.split(':');
+                    const [key, ...rest] = item.split(':');
+                    const value = rest.join(':');
                     if (value.trim() === '') continue;
                     headers[key.trim()] = value.trim().split(',');
                 }
             transport.headers = headers;
         }
     }
-    if (proxy['ws-headers']) {
+    if (isPlainObject(proxy['ws-headers'])) {
         const headers = {};
         for (const key of Object.keys(proxy['ws-headers'])) {
             let value = proxy['ws-headers'][key];
@@ -109,9 +112,10 @@ const wsParser = (proxy, parsedProxy) => {
             if (value.length > 0) headers[key] = value;
         }
         const { Host: wsHost } = headers;
-        if (wsHost.length === 1)
+        if (wsHost?.length === 1)
             for (const item of `Host:${wsHost[0]}`.split('\n')) {
-                const [key, value] = item.split(':');
+                const [key, ...rest] = item.split(':');
+                const value = rest.join(':');
                 if (value.trim() === '') continue;
                 headers[key.trim()] = value.trim().split(',');
             }
@@ -131,9 +135,9 @@ const wsParser = (proxy, parsedProxy) => {
         }
     }
 
-    if (parsedProxy.tls.insecure)
+    if (parsedProxy.tls?.insecure && transport.headers?.Host)
         parsedProxy.tls.server_name = transport.headers.Host[0];
-    if (proxy['ws-opts'] && proxy['ws-opts']['v2ray-http-upgrade']) {
+    if (wsOptions['v2ray-http-upgrade']) {
         transport.type = 'httpupgrade';
         if (transport.headers.Host) {
             transport.host = transport.headers.Host[0];
@@ -152,12 +156,16 @@ const wsParser = (proxy, parsedProxy) => {
 
 const h1Parser = (proxy, parsedProxy) => {
     const transport = { type: 'http', headers: {} };
-    if (proxy['http-opts']) {
+    const httpOptions = isPlainObject(proxy['http-opts'])
+        ? proxy['http-opts']
+        : {};
+    if (Object.keys(httpOptions).length > 0) {
         const {
             method = '',
             path: h1Path = '',
-            headers: h1Headers = {},
-        } = proxy['http-opts'];
+            headers: rawH1Headers = {},
+        } = httpOptions;
+        const h1Headers = isPlainObject(rawH1Headers) ? rawH1Headers : {};
         if (method !== '') transport.method = method;
         if (Array.isArray(h1Path)) {
             transport.path = `${h1Path[0]}`;
@@ -190,7 +198,7 @@ const h1Parser = (proxy, parsedProxy) => {
             transport.path = `${path[0]}`;
         } else if (path !== '') transport.path = `${path}`;
     }
-    if (parsedProxy.tls.insecure)
+    if (parsedProxy.tls?.insecure && transport.host)
         parsedProxy.tls.server_name = transport.host[0];
     if (transport.host?.length === 1) transport.host = transport.host[0];
     for (const key of Object.keys(transport.headers)) {
@@ -204,6 +212,10 @@ const h2Parser = (proxy, parsedProxy) => {
     const transport = { type: 'http' };
     if (proxy['h2-opts']) {
         let { host = '', path = '' } = proxy['h2-opts'];
+        // URI 解析器将 host 存储在 headers.host（小写）路径下
+        if (host === '' && proxy['h2-opts']?.headers?.host) {
+            host = proxy['h2-opts'].headers.host;
+        }
         if (path !== '') transport.path = `${path}`;
         if (host !== '') {
             if (!Array.isArray(host))
@@ -220,9 +232,9 @@ const h2Parser = (proxy, parsedProxy) => {
     if (proxy['h2-path'] && proxy['h2-path'] !== '')
         transport.path = `${proxy['h2-path']}`;
     parsedProxy.tls.enabled = true;
-    if (parsedProxy.tls.insecure)
+    if (parsedProxy.tls?.insecure && transport.host)
         parsedProxy.tls.server_name = transport.host[0];
-    if (transport.host.length === 1) transport.host = transport.host[0];
+    if (transport.host?.length === 1) transport.host = transport.host[0];
     parsedProxy.transport = transport;
 };
 
@@ -398,6 +410,9 @@ const socks5Parser = (proxy = {}) => {
 };
 
 const shadowTLSParser = (proxy = {}) => {
+    const pluginOpts = isPlainObject(proxy['plugin-opts'])
+        ? proxy['plugin-opts']
+        : {};
     const ssPart = {
         tag: proxy.name,
         type: 'shadowsocks',
@@ -421,11 +436,11 @@ const shadowTLSParser = (proxy = {}) => {
         type: 'shadowtls',
         server: proxy.server,
         server_port: parseInt(`${proxy.port}`, 10),
-        version: proxy['plugin-opts'].version,
-        password: proxy['plugin-opts'].password,
+        version: pluginOpts.version,
+        password: pluginOpts.password,
         tls: {
             enabled: true,
-            server_name: proxy['plugin-opts'].host,
+            server_name: pluginOpts.host,
             utls: {
                 enabled: true,
                 fingerprint: proxy['client-fingerprint'],
@@ -470,54 +485,53 @@ const ssParser = (proxy = {}) => {
     smuxParser(proxy.smux, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
     if (proxy.plugin) {
+        const pluginOpts = isPlainObject(proxy['plugin-opts'])
+            ? { ...proxy['plugin-opts'] }
+            : {};
         const optArr = [];
         if (proxy.plugin === 'obfs') {
             parsedProxy.plugin = 'obfs-local';
             parsedProxy.plugin_opts = '';
             if (proxy['obfs-host'])
-                proxy['plugin-opts'].host = proxy['obfs-host'];
-            Object.keys(proxy['plugin-opts']).forEach((k) => {
+                pluginOpts.host = proxy['obfs-host'];
+            Object.keys(pluginOpts).forEach((k) => {
                 switch (k) {
                     case 'mode':
-                        optArr.push(`obfs=${proxy['plugin-opts'].mode}`);
+                        optArr.push(`obfs=${pluginOpts.mode}`);
                         break;
                     case 'host':
-                        optArr.push(`obfs-host=${proxy['plugin-opts'].host}`);
+                        optArr.push(`obfs-host=${pluginOpts.host}`);
                         break;
                     default:
-                        optArr.push(`${k}=${proxy['plugin-opts'][k]}`);
+                        optArr.push(`${k}=${pluginOpts[k]}`);
                         break;
                 }
             });
         }
         if (proxy.plugin === 'v2ray-plugin') {
             parsedProxy.plugin = 'v2ray-plugin';
-            if (proxy['ws-host']) proxy['plugin-opts'].host = proxy['ws-host'];
-            if (proxy['ws-path']) proxy['plugin-opts'].path = proxy['ws-path'];
-            Object.keys(proxy['plugin-opts']).forEach((k) => {
+            if (proxy['ws-host']) pluginOpts.host = proxy['ws-host'];
+            if (proxy['ws-path']) pluginOpts.path = proxy['ws-path'];
+            Object.keys(pluginOpts).forEach((k) => {
                 switch (k) {
                     case 'tls':
-                        if (proxy['plugin-opts'].tls) optArr.push('tls');
+                        if (pluginOpts.tls) optArr.push('tls');
                         break;
                     case 'host':
-                        optArr.push(`host=${proxy['plugin-opts'].host}`);
+                        optArr.push(`host=${pluginOpts.host}`);
                         break;
                     case 'path':
-                        optArr.push(`path=${proxy['plugin-opts'].path}`);
+                        optArr.push(`path=${pluginOpts.path}`);
                         break;
                     case 'headers':
-                        optArr.push(
-                            `headers=${JSON.stringify(
-                                proxy['plugin-opts'].headers,
-                            )}`,
-                        );
+                        optArr.push(`headers=${JSON.stringify(pluginOpts.headers)}`);
                         break;
                     case 'mux':
-                        if (proxy['plugin-opts'].mux)
+                        if (pluginOpts.mux)
                             parsedProxy.multiplex = { enabled: true };
                         break;
                     default:
-                        optArr.push(`${k}=${proxy['plugin-opts'][k]}`);
+                        optArr.push(`${k}=${pluginOpts[k]}`);
                 }
             });
         }
@@ -631,6 +645,8 @@ const trojanParser = (proxy = {}) => {
     if (proxy['fast-open']) parsedProxy.udp_fragment = true;
     if (proxy.network === 'grpc') grpcParser(proxy, parsedProxy);
     if (proxy.network === 'ws') wsParser(proxy, parsedProxy);
+    if (proxy.network === 'h2') h2Parser(proxy, parsedProxy);
+    if (proxy.network === 'http') h1Parser(proxy, parsedProxy);
     networkParser(proxy, parsedProxy);
     tfoParser(proxy, parsedProxy);
     detourParser(proxy, parsedProxy);
@@ -704,7 +720,7 @@ const hysteriaParser = (proxy = {}) => {
             ? `${proxy['hop-interval']}s`
             : proxy['hop-interval'];
     if (proxy['ports'])
-        parsedProxy.server_ports = proxy['ports'].split(/\s*,\s*/).map((p) => {
+        parsedProxy.server_ports = `${proxy['ports']}`.split(/\s*,\s*/).map((p) => {
             const range = p.replace(/\s*-\s*/g, ':');
             return range.includes(':') ? range : `${range}:${range}`;
         });
@@ -764,12 +780,26 @@ const hysteria2Parser = (proxy = {}) => {
             ? `${proxy['hop-interval']}s`
             : proxy['hop-interval'];
     if (proxy['ports'])
-        parsedProxy.server_ports = proxy['ports'].split(/\s*,\s*/).map((p) => {
+        parsedProxy.server_ports = `${proxy['ports']}`.split(/\s*,\s*/).map((p) => {
             const range = p.replace(/\s*-\s*/g, ':');
             return range.includes(':') ? range : `${range}:${range}`;
         });
-    if (proxy.up) parsedProxy.up_mbps = parseInt(`${proxy.up}`, 10);
-    if (proxy.down) parsedProxy.down_mbps = parseInt(`${proxy.down}`, 10);
+    // eslint-disable-next-line no-control-regex
+    const reg = new RegExp('^[0-9]+[ \t]*[KMGT]*[Bb]ps$');
+    if (proxy.up) {
+        if (reg.test(`${proxy.up}`) && !`${proxy.up}`.endsWith('Mbps')) {
+            parsedProxy.up = `${proxy.up}`;
+        } else {
+            parsedProxy.up_mbps = parseInt(`${proxy.up}`, 10);
+        }
+    }
+    if (proxy.down) {
+        if (reg.test(`${proxy.down}`) && !`${proxy.down}`.endsWith('Mbps')) {
+            parsedProxy.down = `${proxy.down}`;
+        } else {
+            parsedProxy.down_mbps = parseInt(`${proxy.down}`, 10);
+        }
+    }
     if (proxy.obfs === 'salamander') parsedProxy.obfs.type = 'salamander';
     if (proxy['obfs-password'])
         parsedProxy.obfs.password = proxy['obfs-password'];
@@ -833,6 +863,7 @@ const anytlsParser = (proxy = {}) => {
             10,
         );
     networkParser(proxy, parsedProxy);
+    tfoParser(proxy, parsedProxy);
     detourParser(proxy, parsedProxy);
     tlsParser(proxy, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
@@ -879,7 +910,7 @@ const wireguardParser = (proxy = {}) => {
                 reserved: [],
             };
             if (typeof p.reserved === 'string') {
-                peer.reserved.push(p.reserved);
+                peer.reserved = p.reserved;
             } else if (Array.isArray(p.reserved)) {
                 for (const r of p.reserved) peer.reserved.push(r);
             } else {

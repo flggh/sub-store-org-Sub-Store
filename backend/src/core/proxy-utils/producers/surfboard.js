@@ -134,13 +134,17 @@ function shadowsocks(proxy) {
     // obfs
     if (isPresent(proxy, 'plugin')) {
         if (proxy.plugin === 'obfs') {
-            result.append(`,obfs=${proxy['plugin-opts'].mode}`);
+            if (!proxy['plugin-opts']) {
+                throw new Error(`plugin obfs requires plugin-opts`);
+            }
+            const pluginOpts = proxy['plugin-opts'];
+            result.append(`,obfs=${pluginOpts.mode}`);
             result.appendIfPresent(
-                `,obfs-host=${proxy['plugin-opts'].host}`,
+                `,obfs-host=${pluginOpts.host}`,
                 'plugin-opts.host',
             );
             result.appendIfPresent(
-                `,obfs-uri=${proxy['plugin-opts'].path}`,
+                `,obfs-uri=${pluginOpts.path}`,
                 'plugin-opts.path',
             );
         } else {

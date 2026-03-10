@@ -26,6 +26,10 @@ import Gist from '@/utils/gist';
 import { isPresent } from './producers/utils';
 import { doh } from '@/utils/dns';
 import JSON5 from 'json5';
+import {
+    safeDecodeURIComponent,
+    parseBooleanStyleArgs,
+} from '@/utils/parse';
 
 function preprocess(raw) {
     for (const processor of PROXY_PREPROCESSORS) {
@@ -125,15 +129,7 @@ async function processFn(
                         // 支持 `#${encodeURIComponent(JSON.stringify({arg1: "1"}))}`
                         $arguments = JSON.parse(decodeURIComponent(rawArgs[1]));
                     } catch (e) {
-                        for (const pair of rawArgs[1].split('&')) {
-                            const key = pair.split('=')[0];
-                            const value = pair.split('=')[1];
-                            // 部分兼容之前的逻辑 const value = pair.split('=')[1] || true;
-                            $arguments[key] =
-                                value == null || value === ''
-                                    ? true
-                                    : decodeURIComponent(value);
-                        }
+                        $arguments = parseBooleanStyleArgs(rawArgs[1]);
                     }
                 }
                 console.log(rawArgs);
@@ -156,9 +152,9 @@ async function processFn(
                         if (name == null) {
                             throw new Error(`本地 ${type} URL 无效: ${url}`);
                         }
-                        name = decodeURIComponent(name);
+                        name = safeDecodeURIComponent(name);
                         const key = type === 'module' ? MODULES_KEY : FILES_KEY;
-                        const item = findByName($.read(key), name);
+                        const item = findByName($.read(key) || [], name);
                         if (!item) {
                             throw new Error(`找不到 ${type}: ${name}`);
                         }

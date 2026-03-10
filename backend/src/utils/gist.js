@@ -13,7 +13,7 @@ export default class Gist {
             defaultProxy,
             defaultTimeout: timeout,
             githubProxy,
-        } = $.read(SETTINGS_KEY);
+        } = $.read(SETTINGS_KEY) || {};
         let proxy = defaultProxy;
         if ($.env.isNode) {
             proxy =
@@ -50,10 +50,16 @@ export default class Gist {
                 events: {
                     onResponse: (resp) => {
                         if (/^[45]/.test(String(resp.statusCode))) {
-                            const body = JSON.parse(resp.body);
-                            return Promise.reject(
-                                `ERROR: ${body.message?.error ?? body.message}`,
-                            );
+                            try {
+                                const body = JSON.parse(resp.body);
+                                return Promise.reject(
+                                    `ERROR: ${body.message?.error ?? body.message}`,
+                                );
+                            } catch (e) {
+                                return Promise.reject(
+                                    `ERROR: HTTP ${resp.statusCode}`,
+                                );
+                            }
                         } else {
                             return resp;
                         }
@@ -92,9 +98,15 @@ export default class Gist {
                 events: {
                     onResponse: (resp) => {
                         if (/^[45]/.test(String(resp.statusCode))) {
-                            return Promise.reject(
-                                `ERROR: ${JSON.parse(resp.body).message}`,
-                            );
+                            try {
+                                return Promise.reject(
+                                    `ERROR: ${JSON.parse(resp.body).message}`,
+                                );
+                            } catch (e) {
+                                return Promise.reject(
+                                    `ERROR: HTTP ${resp.statusCode}`,
+                                );
+                            }
                         } else {
                             return resp;
                         }
@@ -277,11 +289,34 @@ export default class Gist {
         const gist = await this.locate();
         if (gist?.id) {
             try {
-                const { files } = await this.http
-                    .get(`/gists/${gist.id}`)
-                    .then((resp) => JSON.parse(resp.body));
-                const url = files[filename].raw_url;
-                return await this.http.get(url).then((resp) => resp.body);
+                if (this.syncPlatform === 'gitlab') {
+                    const snippet = await this.http
+                        .get(`/snippets/${gist.id}`)
+                        .then((resp) => JSON.parse(resp.body));
+                    const file = snippet.files?.find(
+                        (f) => f.path === filename,
+                    );
+                    if (!file?.raw_url) {
+                        return Promise.reject(
+                            `找不到文件 ${filename}`,
+                        );
+                    }
+                    return await this.http
+                        .get(file.raw_url)
+                        .then((resp) => resp.body);
+                } else {
+                    const { files } = await this.http
+                        .get(`/gists/${gist.id}`)
+                        .then((resp) => JSON.parse(resp.body));
+                    const file = files?.[filename];
+                    if (!file?.raw_url) {
+                        return Promise.reject(`找不到文件 ${filename}`);
+                    }
+                    const url = file.raw_url;
+                    return await this.http
+                        .get(url)
+                        .then((resp) => resp.body);
+                }
             } catch (err) {
                 return Promise.reject(err);
             }

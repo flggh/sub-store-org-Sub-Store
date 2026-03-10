@@ -43,32 +43,39 @@ export default function register($app) {
         .post((req, res) => {
             let { content } = req.body;
             try {
-                content = JSON.parse(Base64.decode(content));
-                if (!(Object.keys(content.settings).length >= 0)) {
-                    throw new Error('备份文件应该至少包含 settings 字段');
-                }
-            } catch (err) {
                 try {
-                    content = JSON.parse(content);
-                    if (!(Object.keys(content.settings).length >= 0)) {
+                    content = JSON.parse(Base64.decode(content));
+                    if (!content.settings || typeof content.settings !== 'object') {
                         throw new Error('备份文件应该至少包含 settings 字段');
                     }
                 } catch (err) {
-                    $.error(
-                        `备份文件校验失败, 无法还原\nReason: ${
-                            err.message ?? err
-                        }`,
-                    );
-                    throw new Error('备份文件校验失败, 无法还原');
+                    content = JSON.parse(req.body.content);
+                    if (!content.settings || typeof content.settings !== 'object') {
+                        throw new Error('备份文件应该至少包含 settings 字段');
+                    }
                 }
+                $.write(JSON.stringify(content, null, `  `), '#sub-store');
+                if ($.env.isNode) {
+                    $.cache = content;
+                    $.persistCache();
+                }
+                migrate();
+                success(res);
+            } catch (err) {
+                $.error(
+                    `备份文件校验失败, 无法还原\nReason: ${
+                        err.message ?? err
+                    }`,
+                );
+                failed(
+                    res,
+                    new RequestInvalidError(
+                        'INVALID_BACKUP',
+                        `备份文件校验失败, 无法还原`,
+                        `Reason: ${err.message ?? err}`,
+                    ),
+                );
             }
-            $.write(JSON.stringify(content, null, `  `), '#sub-store');
-            if ($.env.isNode) {
-                $.cache = content;
-                $.persistCache();
-            }
-            migrate();
-            success(res);
         });
 
     if (ENV().isNode) {
@@ -128,7 +135,7 @@ async function refresh(_, res) {
 
 async function gistBackupAction(action, keep, encode) {
     // read token
-    const { gistToken, syncPlatform } = $.read(SETTINGS_KEY);
+    const { gistToken, syncPlatform } = $.read(SETTINGS_KEY) || {};
     if (!gistToken) throw new Error('GitHub Token is required for backup!');
 
     const gist = new Gist({
@@ -140,7 +147,7 @@ async function gistBackupAction(action, keep, encode) {
     currentContent = currentContent ? JSON.parse(currentContent) : {};
     if ($.env.isNode) currentContent = JSON.parse(JSON.stringify($.cache));
     let content;
-    const settings = $.read(SETTINGS_KEY);
+    const settings = $.read(SETTINGS_KEY) || {};
     const updated = settings.syncTime;
 
     const encoding = encode || settings.gistUpload || 'base64';
@@ -205,13 +212,13 @@ async function gistBackupAction(action, keep, encode) {
             content = await gist.download(GIST_BACKUP_FILE_NAME);
             try {
                 content = JSON.parse(Base64.decode(content));
-                if (!(Object.keys(content.settings).length >= 0)) {
+                if (!content.settings || typeof content.settings !== 'object') {
                     throw new Error('备份文件应该至少包含 settings 字段');
                 }
             } catch (err) {
                 try {
                     content = JSON.parse(content);
-                    if (!(Object.keys(content.settings).length >= 0)) {
+                    if (!content.settings || typeof content.settings !== 'object') {
                         throw new Error('备份文件应该至少包含 settings 字段');
                     }
                 } catch (err) {
@@ -245,7 +252,7 @@ async function gistBackupAction(action, keep, encode) {
 async function gistBackup(req, res) {
     const { action, keep, encode } = req.query;
     // read token
-    const { gistToken } = $.read(SETTINGS_KEY);
+    const { gistToken } = $.read(SETTINGS_KEY) || {};
     if (!gistToken) {
         failed(
             res,

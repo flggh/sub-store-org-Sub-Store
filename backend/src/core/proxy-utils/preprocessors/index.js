@@ -179,7 +179,7 @@ function FullConfig() {
     };
     const parse = function (raw) {
         const match = raw.match(
-            /^\[server_local|Proxy\]([\s\S]+?)^\[.+?\](\r?\n|$)/im,
+            /^(?:\[server_local\]|\[Proxy\])([\s\S]+?)^\[.+?\](\r?\n|$)/im,
         )?.[1];
         return match || raw;
     };

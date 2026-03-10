@@ -28,7 +28,7 @@ function vless(proxy) {
     let alpn = '';
     if (proxy.alpn) {
         alpn = `&alpn=${encodeURIComponent(
-            Array.isArray(proxy.alpn) ? proxy.alpn : proxy.alpn.join(','),
+            Array.isArray(proxy.alpn) ? proxy.alpn.join(',') : proxy.alpn,
         )}`;
     }
     let allowInsecure = '';
@@ -95,7 +95,10 @@ function vless(proxy) {
     let vlessTransportServiceName =
         proxy[`${proxy.network}-opts`]?.[`${proxy.network}-service-name`];
     let vlessTransportPath = proxy[`${proxy.network}-opts`]?.path;
-    let vlessTransportHost = proxy[`${proxy.network}-opts`]?.headers?.Host;
+    let vlessTransportHost =
+        proxy[`${proxy.network}-opts`]?.headers?.[
+            proxy.network === 'h2' ? 'host' : 'Host'
+        ];
     if (vlessTransportPath) {
         vlessTransport += `&path=${encodeURIComponent(
             Array.isArray(vlessTransportPath)
@@ -256,7 +259,9 @@ export default function URI_Producer() {
                     }
                     let ssTransportPath = proxy[`${proxy.network}-opts`]?.path;
                     let ssTransportHost =
-                        proxy[`${proxy.network}-opts`]?.headers?.Host;
+                        proxy[`${proxy.network}-opts`]?.headers?.[
+                            proxy.network === 'h2' ? 'host' : 'Host'
+                        ];
                     if (ssTransportPath) {
                         ssTransport += `&path=${encodeURIComponent(
                             Array.isArray(ssTransportPath)
@@ -282,8 +287,8 @@ export default function URI_Producer() {
                 if (proxy.alpn) {
                     ssAlpn = `&alpn=${encodeURIComponent(
                         Array.isArray(proxy.alpn)
-                            ? proxy.alpn
-                            : proxy.alpn.join(','),
+                            ? proxy.alpn.join(',')
+                            : proxy.alpn,
                     )}`;
                 }
                 const ssIsReality = proxy['reality-opts'];
@@ -377,7 +382,9 @@ export default function URI_Producer() {
                     let vmessTransportPath =
                         proxy[`${proxy.network}-opts`]?.path;
                     let vmessTransportHost =
-                        proxy[`${proxy.network}-opts`]?.headers?.Host;
+                        proxy[`${proxy.network}-opts`]?.headers?.[
+                            proxy.network === 'h2' ? 'host' : 'Host'
+                        ];
 
                     if (['grpc'].includes(proxy.network)) {
                         result.path =
@@ -458,7 +465,9 @@ export default function URI_Producer() {
                     let trojanTransportPath =
                         proxy[`${proxy.network}-opts`]?.path;
                     let trojanTransportHost =
-                        proxy[`${proxy.network}-opts`]?.headers?.Host;
+                        proxy[`${proxy.network}-opts`]?.headers?.[
+                            proxy.network === 'h2' ? 'host' : 'Host'
+                        ];
                     if (trojanTransportPath) {
                         trojanTransport += `&path=${encodeURIComponent(
                             Array.isArray(trojanTransportPath)
@@ -484,8 +493,8 @@ export default function URI_Producer() {
                 if (proxy.alpn) {
                     trojanAlpn = `&alpn=${encodeURIComponent(
                         Array.isArray(proxy.alpn)
-                            ? proxy.alpn
-                            : proxy.alpn.join(','),
+                            ? proxy.alpn.join(',')
+                            : proxy.alpn,
                     )}`;
                 }
                 const trojanIsReality = proxy['reality-opts'];
@@ -518,7 +527,7 @@ export default function URI_Producer() {
                         trojanMode = `&mode=${encodeURIComponent(proxy._mode)}`;
                     }
                 }
-                result = `trojan://${proxy.password}@${proxy.server}:${
+                result = `trojan://${encodeURIComponent(proxy.password)}@${proxy.server}:${
                     proxy.port
                 }?sni=${encodeURIComponent(proxy.sni || proxy.server)}${
                     proxy['skip-cert-verify'] ? '&allowInsecure=1' : ''
@@ -579,7 +588,7 @@ export default function URI_Producer() {
                 let hysteriaParams = [];
                 Object.keys(proxy).forEach((key) => {
                     if (!['name', 'type', 'server', 'port'].includes(key)) {
-                        const i = key.replace(/-/, '_');
+                        const i = key.replace(/-/g, '_');
                         if (['alpn'].includes(key)) {
                             if (proxy[key]) {
                                 hysteriaParams.push(
@@ -645,7 +654,7 @@ export default function URI_Producer() {
                                 'tls',
                             ].includes(key)
                         ) {
-                            const i = key.replace(/-/, '_');
+                            const i = key.replace(/-/g, '_');
                             if (['alpn'].includes(key)) {
                                 if (proxy[key]) {
                                     tuicParams.push(
@@ -717,7 +726,7 @@ export default function URI_Producer() {
                             'tls',
                         ].includes(key)
                     ) {
-                        const i = key.replace(/-/, '_');
+                        const i = key.replace(/-/g, '_');
                         if (['alpn'].includes(key)) {
                             if (proxy[key]) {
                                 anytlsParams.push(
@@ -760,7 +769,9 @@ export default function URI_Producer() {
                     const queryString = urlParts[1].split('#')[0]; // Remove fragment if exists
                     const pairs = queryString.split('&');
                     pairs.forEach((pair) => {
-                        const [key, value] = pair.split('=');
+                        const eqIdx = pair.indexOf('=');
+                        const key = eqIdx === -1 ? pair : pair.substring(0, eqIdx);
+                        const value = eqIdx === -1 ? undefined : pair.substring(eqIdx + 1);
                         if (key) {
                             existingParams[key] = value;
                         }
@@ -769,7 +780,9 @@ export default function URI_Producer() {
 
                 // Merge anytlsParams with existing parameters
                 anytlsParams.forEach((param) => {
-                    const [key, value] = param.split('=');
+                    const eqIdx = param.indexOf('=');
+                    const key = eqIdx === -1 ? param : param.substring(0, eqIdx);
+                    const value = eqIdx === -1 ? undefined : param.substring(eqIdx + 1);
                     if (key) {
                         existingParams[key] = value;
                     }

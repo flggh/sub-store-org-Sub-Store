@@ -37,7 +37,7 @@ export default function serve() {
         const fe_be_path = eval('process.env.SUB_STORE_FRONTEND_BACKEND_PATH');
         const fe_path = eval('process.env.SUB_STORE_FRONTEND_PATH');
         if (be_prefix || be_merge) {
-            if (!fe_be_path.startsWith('/')) {
+            if (!fe_be_path || !fe_be_path.startsWith('/')) {
                 throw new Error(
                     'SUB_STORE_FRONTEND_BACKEND_PATH should start with /',
                 );
@@ -56,8 +56,15 @@ export default function serve() {
                     next();
                     return;
                 }
-                const pathname =
-                    decodeURIComponent(req._parsedUrl.pathname) || '/';
+                let pathname = '/';
+                try {
+                    pathname =
+                        (typeof req._parsedUrl?.pathname === 'string'
+                            ? decodeURIComponent(req._parsedUrl.pathname)
+                            : '') || '/';
+                } catch {
+                    pathname = req.path || '/';
+                }
                 if (
                     be_merge &&
                     req.path.startsWith('/share/') &&
@@ -81,7 +88,7 @@ export default function serve() {
                         next();
                         return;
                     } else {
-                        const settings = $.read(SETTINGS_KEY);
+                        const settings = $.read(SETTINGS_KEY) || {};
                         if (settings?.appearanceSetting?.invalidShareFakeNode) {
                             req.query._fakeNode = true;
                             req.url = req.url.replace(
@@ -399,7 +406,7 @@ export default function serve() {
                                     (t.exp == null || t.exp > Date.now()),
                             );
                             if (!token) {
-                                const settings = $.read(SETTINGS_KEY);
+                                const settings = $.read(SETTINGS_KEY) || {};
                                 if (
                                     settings?.appearanceSetting
                                         ?.invalidShareFakeNode
@@ -470,7 +477,7 @@ export default function serve() {
                 .then(async (content) => {
                     try {
                         content = JSON.parse(Base64.decode(content));
-                        if (!(Object.keys(content.settings).length >= 0)) {
+                        if (!content.settings || typeof content.settings !== 'object') {
                             throw new Error(
                                 '备份文件应该至少包含 settings 字段',
                             );
@@ -478,7 +485,7 @@ export default function serve() {
                     } catch (err) {
                         try {
                             content = JSON.parse(content);
-                            if (!(Object.keys(content.settings).length >= 0)) {
+                            if (!content.settings || typeof content.settings !== 'object') {
                                 throw new Error(
                                     '备份文件应该至少包含 settings 字段',
                                 );

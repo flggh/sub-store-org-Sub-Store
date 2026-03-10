@@ -25,7 +25,7 @@ async function previewFile(req, res) {
             } else {
                 const errors = {};
                 content = await Promise.all(
-                    file.url
+                    `${file.url || ''}`
                         .split(/[\r\n]+/)
                         .map((i) => i.trim())
                         .filter((i) => i.length)
@@ -117,7 +117,7 @@ async function compareSub(req, res) {
         } else {
             const errors = {};
             content = await Promise.all(
-                sub.url
+                `${sub.url || ''}`
                     .split(/[\r\n]+/)
                     .map((i) => i.trim())
                     .filter((i) => i.length)
@@ -203,9 +203,11 @@ async function compareSub(req, res) {
 
 async function compareCollection(req, res) {
     try {
-        const allSubs = $.read(SUBS_KEY);
+        const allSubs = $.read(SUBS_KEY) || [];
         const collection = req.body;
-        const subnames = [...collection.subscriptions];
+        const subnames = Array.isArray(collection.subscriptions)
+            ? [...collection.subscriptions]
+            : [];
         let subscriptionTags = collection.subscriptionTags;
         if (Array.isArray(subscriptionTags) && subscriptionTags.length > 0) {
             allSubs.forEach((sub) => {
@@ -224,6 +226,10 @@ async function compareCollection(req, res) {
         await Promise.all(
             subnames.map(async (name) => {
                 const sub = findByName(allSubs, name);
+                if (!sub) {
+                    errors[name] = new Error(`找不到订阅 ${name}`);
+                    return;
+                }
                 try {
                     let raw;
                     if (
@@ -236,7 +242,7 @@ async function compareCollection(req, res) {
                     } else {
                         const errors = {};
                         raw = await Promise.all(
-                            sub.url
+                            `${sub.url || ''}`
                                 .split(/[\r\n]+/)
                                 .map((i) => i.trim())
                                 .filter((i) => i.length)

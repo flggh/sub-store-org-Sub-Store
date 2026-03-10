@@ -6,7 +6,7 @@ import { RequestInvalidError, ResourceNotFoundError } from '@/restful/errors';
 import { formatDateTime } from '@/utils';
 
 export default function register($app) {
-    if (!$.read(COLLECTIONS_KEY)) $.write({}, COLLECTIONS_KEY);
+    if (!$.read(COLLECTIONS_KEY)) $.write([], COLLECTIONS_KEY);
 
     $app.route('/api/collection/:name')
         .get(getCollection)
@@ -33,7 +33,7 @@ function createCollection(req, res) {
         );
         return;
     }
-    const allCols = $.read(COLLECTIONS_KEY);
+    const allCols = $.read(COLLECTIONS_KEY) || [];
     if (findByName(allCols, collection.name)) {
         failed(
             res,
@@ -52,7 +52,7 @@ function createCollection(req, res) {
 function getCollection(req, res) {
     let { name } = req.params;
     let { raw } = req.query;
-    const allCols = $.read(COLLECTIONS_KEY);
+    const allCols = $.read(COLLECTIONS_KEY) || [];
     const collection = findByName(allCols, name);
     if (collection) {
         if (raw) {
@@ -84,7 +84,7 @@ function getCollection(req, res) {
 function updateCollection(req, res) {
     let { name } = req.params;
     let collection = req.body;
-    const allCols = $.read(COLLECTIONS_KEY);
+    const allCols = $.read(COLLECTIONS_KEY) || [];
     const oldCol = findByName(allCols, name);
     if (oldCol) {
         if (!collection.name) collection.name = oldCol.name;
@@ -137,19 +137,20 @@ function updateCollection(req, res) {
 function deleteCollection(req, res) {
     let { name } = req.params;
     $.info(`正在删除组合订阅：${name}`);
-    let allCols = $.read(COLLECTIONS_KEY);
+    let allCols = $.read(COLLECTIONS_KEY) || [];
     deleteByName(allCols, name);
     $.write(allCols, COLLECTIONS_KEY);
     success(res);
 }
 
 function getAllCollections(req, res) {
-    const allCols = $.read(COLLECTIONS_KEY);
+    const allCols = $.read(COLLECTIONS_KEY) || [];
     success(res, allCols);
 }
 
 function replaceCollection(req, res) {
     const allCols = req.body;
+    if (!Array.isArray(allCols)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
     $.write(allCols, COLLECTIONS_KEY);
     success(res);
 }

@@ -9,14 +9,16 @@ import $ from '@/core/app';
 import { produceArtifact } from '@/restful/sync';
 import { syncToGist } from '@/restful/artifacts';
 import { findByName } from '@/utils/database';
+import {
+    safeDecodeURIComponent,
+    parseArgumentString,
+} from '@/utils/parse';
 
 !(async function () {
     let arg;
     if (typeof $argument != 'undefined') {
-        arg = Object.fromEntries(
-            // eslint-disable-next-line no-undef
-            $argument.split('&').map((item) => item.split('=')),
-        );
+        // eslint-disable-next-line no-undef
+        arg = parseArgumentString($argument);
     } else {
         arg = {};
     }
@@ -24,23 +26,23 @@ import { findByName } from '@/utils/database';
         .split(/,|，/g)
         .map((i) => i.trim())
         .filter((i) => i.length > 0)
-        .map((i) => decodeURIComponent(i));
+        .map((i) => safeDecodeURIComponent(i));
     let col_names = (arg?.collection ?? arg?.col ?? '')
         .split(/,|，/g)
         .map((i) => i.trim())
         .filter((i) => i.length > 0)
-        .map((i) => decodeURIComponent(i));
+        .map((i) => safeDecodeURIComponent(i));
     if (sub_names.length > 0 || col_names.length > 0) {
         if (sub_names.length > 0)
             await produceArtifacts(sub_names, 'subscription');
         if (col_names.length > 0)
             await produceArtifacts(col_names, 'collection');
     } else {
-        const settings = $.read(SETTINGS_KEY);
+        const settings = $.read(SETTINGS_KEY) || {};
         // if GitHub token is not configured
         if (!settings.githubUser || !settings.gistToken) return;
 
-        const artifacts = $.read(ARTIFACTS_KEY);
+        const artifacts = $.read(ARTIFACTS_KEY) || [];
         if (!artifacts || artifacts.length === 0) return;
 
         const shouldSync = artifacts.some((artifact) => artifact.sync);
@@ -80,14 +82,14 @@ async function doSync() {
     );
 
     $.info('开始同步所有远程配置...');
-    const allArtifacts = $.read(ARTIFACTS_KEY);
+    const allArtifacts = $.read(ARTIFACTS_KEY) || [];
     const files = {};
 
     try {
         const valid = [];
         const invalid = [];
-        const allSubs = $.read(SUBS_KEY);
-        const allCols = $.read(COLLECTIONS_KEY);
+        const allSubs = $.read(SUBS_KEY) || [];
+        const allCols = $.read(COLLECTIONS_KEY) || [];
         const subNames = [];
         let enabledCount = 0;
         allArtifacts.map((artifact) => {

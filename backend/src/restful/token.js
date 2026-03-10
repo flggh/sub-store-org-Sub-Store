@@ -26,7 +26,7 @@ function deleteToken(req, res) {
             ),
         );
     $.info(`正在删除...\ntoken: ${token}, 类型：${type}, 名称：${name}`);
-    let allTokens = $.read(TOKENS_KEY);
+    let allTokens = $.read(TOKENS_KEY) || [];
     allTokens = allTokens.filter(
         (t) => !(t.token === token && t.type === type && t.name === name),
     );
@@ -138,7 +138,7 @@ async function signToken(req, res) {
                 res,
                 new RequestInvalidError(
                     'INVALID_TYPE',
-                    `type ${name} not supported`,
+                    `type ${type} not supported`,
                 ),
             );
         }

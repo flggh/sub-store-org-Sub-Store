@@ -19,8 +19,9 @@ import {
 import { success, failed } from './response';
 import $ from '@/core/app';
 import { formatDateTime } from '@/utils';
+import { parseBooleanStyleArgs } from '@/utils/parse';
 
-if (!$.read(SUBS_KEY)) $.write({}, SUBS_KEY);
+if (!$.read(SUBS_KEY)) $.write([], SUBS_KEY);
 
 export default function register($app) {
     $app.get('/api/sub/flow/:name', getFlowInfo);
@@ -43,7 +44,7 @@ async function getFlowInfo(req, res) {
     if (url) {
         $.info(`指定远程订阅 URL: ${url}`);
     }
-    const allSubs = $.read(SUBS_KEY);
+    const allSubs = $.read(SUBS_KEY) || [];
     const sub = findByName(allSubs, name);
     if (!sub) {
         failed(
@@ -114,7 +115,7 @@ async function getFlowInfo(req, res) {
     }
     try {
         url =
-            `${url || sub.url}`
+            `${url || sub.url || ''}`
                 .split(/[\r\n]+/)
                 .map((i) => i.trim())
                 .filter((i) => i.length)?.[0] || '';
@@ -127,15 +128,7 @@ async function getFlowInfo(req, res) {
                 // 支持 `#${encodeURIComponent(JSON.stringify({arg1: "1"}))}`
                 $arguments = JSON.parse(decodeURIComponent(rawArgs[1]));
             } catch (e) {
-                for (const pair of rawArgs[1].split('&')) {
-                    const key = pair.split('=')[0];
-                    const value = pair.split('=')[1];
-                    // 部分兼容之前的逻辑 const value = pair.split('=')[1] || true;
-                    $arguments[key] =
-                        value == null || value === ''
-                            ? true
-                            : decodeURIComponent(value);
-                }
+                $arguments = parseBooleanStyleArgs(rawArgs[1]);
             }
         }
         if ($arguments.noFlow || !/^https?/.test(url)) {
@@ -242,7 +235,7 @@ function createSubscription(req, res) {
         );
         return;
     }
-    const allSubs = $.read(SUBS_KEY);
+    const allSubs = $.read(SUBS_KEY) || [];
     if (findByName(allSubs, sub.name)) {
         failed(
             res,
@@ -261,10 +254,10 @@ function createSubscription(req, res) {
 function getSubscription(req, res) {
     let { name } = req.params;
     let { raw } = req.query;
-    const allSubs = $.read(SUBS_KEY);
+    const allSubs = $.read(SUBS_KEY) || [];
     const sub = findByName(allSubs, name);
-    delete sub.subscriptions;
     if (sub) {
+        delete sub.subscriptions;
         if (raw) {
             res.set('content-type', 'application/json')
                 .set(
@@ -295,7 +288,7 @@ function updateSubscription(req, res) {
     let { name } = req.params;
     let sub = req.body;
     delete sub.subscriptions;
-    const allSubs = $.read(SUBS_KEY);
+    const allSubs = $.read(SUBS_KEY) || [];
     const oldSub = findByName(allSubs, name);
     if (oldSub) {
         if (!sub.name) sub.name = oldSub.name;
@@ -309,9 +302,12 @@ function updateSubscription(req, res) {
             // update all collections refer to this name
             const allCols = $.read(COLLECTIONS_KEY) || [];
             for (const collection of allCols) {
-                const idx = collection.subscriptions.indexOf(name);
-                if (idx !== -1) {
-                    collection.subscriptions[idx] = sub.name;
+                const subs = collection.subscriptions;
+                if (Array.isArray(subs)) {
+                    const idx = subs.indexOf(name);
+                    if (idx !== -1) {
+                        subs[idx] = sub.name;
+                    }
                 }
             }
 
@@ -320,7 +316,7 @@ function updateSubscription(req, res) {
             for (const artifact of allArtifacts) {
                 if (
                     artifact.type === 'subscription' &&
-                    artifact.source == name
+                    artifact.source === name
                 ) {
                     artifact.source = sub.name;
                 }
@@ -330,7 +326,7 @@ function updateSubscription(req, res) {
             for (const file of allFiles) {
                 if (
                     file.sourceType === 'subscription' &&
-                    file.sourceName == name
+                    file.sourceName === name
                 ) {
                     file.sourceName = sub.name;
                 }
@@ -359,13 +355,13 @@ function deleteSubscription(req, res) {
     let { name } = req.params;
     $.info(`删除订阅：${name}...`);
     // delete from subscriptions
-    let allSubs = $.read(SUBS_KEY);
+    let allSubs = $.read(SUBS_KEY) || [];
     deleteByName(allSubs, name);
     $.write(allSubs, SUBS_KEY);
     // delete from collections
-    const allCols = $.read(COLLECTIONS_KEY);
+    const allCols = $.read(COLLECTIONS_KEY) || [];
     for (const collection of allCols) {
-        collection.subscriptions = collection.subscriptions.filter(
+        collection.subscriptions = (collection.subscriptions || []).filter(
             (s) => s !== name,
         );
     }
@@ -374,12 +370,13 @@ function deleteSubscription(req, res) {
 }
 
 function getAllSubscriptions(req, res) {
-    const allSubs = $.read(SUBS_KEY);
+    const allSubs = $.read(SUBS_KEY) || [];
     success(res, allSubs);
 }
 
 function replaceSubscriptions(req, res) {
     const allSubs = req.body;
+    if (!Array.isArray(allSubs)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
     $.write(allSubs, SUBS_KEY);
     success(res);
 }

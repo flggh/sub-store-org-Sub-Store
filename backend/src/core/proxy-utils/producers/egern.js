@@ -31,7 +31,7 @@ export default function Egern_Producer() {
                                 'aes-256-gcm',
                                 'aes-128-gcm',
                                 'none',
-                                'tbale',
+                                'table',
                                 'rc4',
                                 'rc4-md5',
                                 'aes-128-cfb',
@@ -56,13 +56,13 @@ export default function Egern_Producer() {
                                 '2022-blake3-aes-256-gcm',
                             ].includes(proxy.cipher))) ||
                     (proxy.type === 'vmess' &&
-                        !['http', 'ws', 'tcp'].includes(proxy.network) &&
+                        !['http', 'ws', 'tcp', 'h2'].includes(proxy.network) &&
                         proxy.network) ||
                     (proxy.type === 'trojan' &&
-                        !['http', 'ws', 'tcp'].includes(proxy.network) &&
+                        !['http', 'ws', 'tcp', 'h2'].includes(proxy.network) &&
                         proxy.network) ||
                     (proxy.type === 'vless' &&
-                        ((!['http', 'ws', 'tcp'].includes(proxy.network) &&
+                        ((!['http', 'ws', 'tcp', 'h2'].includes(proxy.network) &&
                             proxy.network) ||
                             (typeof proxy.flow !== 'undefined' &&
                                 !['xtls-rprx-vision', ''].includes(
@@ -128,7 +128,7 @@ export default function Egern_Producer() {
                         password: proxy.password,
                         tfo: proxy.tfo || proxy['fast-open'],
                         udp_relay:
-                            proxy.udp || proxy.udp_relay || proxy.udp_relay,
+                            proxy.udp || proxy.udp_relay || proxy['udp-relay'],
                         next_hop: proxy.next_hop,
                     };
                 } else if (proxy.type === 'ss') {
@@ -144,7 +144,7 @@ export default function Egern_Producer() {
                         password: proxy.password,
                         tfo: proxy.tfo || proxy['fast-open'],
                         udp_relay:
-                            proxy.udp || proxy.udp_relay || proxy.udp_relay,
+                            proxy.udp || proxy.udp_relay || proxy['udp-relay'],
                         next_hop: proxy.next_hop,
                     };
                     if (original.plugin === 'obfs') {
@@ -161,7 +161,7 @@ export default function Egern_Producer() {
                         auth: proxy.password,
                         tfo: proxy.tfo || proxy['fast-open'],
                         udp_relay:
-                            proxy.udp || proxy.udp_relay || proxy.udp_relay,
+                            proxy.udp || proxy.udp_relay || proxy['udp-relay'],
                         next_hop: proxy.next_hop,
                         sni: proxy.sni,
                         skip_tls_verify: proxy['skip-cert-verify'],
@@ -170,7 +170,7 @@ export default function Egern_Producer() {
                     };
                     if (
                         original['obfs-password'] &&
-                        original.obfs == 'salamander'
+                        original.obfs === 'salamander'
                     ) {
                         proxy.obfs = 'salamander';
                         proxy.obfs_password = original['obfs-password'];
@@ -198,6 +198,40 @@ export default function Egern_Producer() {
                             path: proxy['ws-opts']?.path,
                             host: proxy['ws-opts']?.headers?.Host,
                         };
+                    } else if (proxy.network === 'http') {
+                        proxy.transport = {
+                            http1: {
+                                method: proxy['http-opts']?.method,
+                                path: Array.isArray(proxy['http-opts']?.path)
+                                    ? proxy['http-opts']?.path[0]
+                                    : proxy['http-opts']?.path,
+                                headers: {
+                                    Host: Array.isArray(
+                                        proxy['http-opts']?.headers?.Host,
+                                    )
+                                        ? proxy['http-opts']?.headers?.Host[0]
+                                        : proxy['http-opts']?.headers?.Host,
+                                },
+                                skip_tls_verify: proxy['skip-cert-verify'],
+                            },
+                        };
+                    } else if (proxy.network === 'h2') {
+                        proxy.transport = {
+                            http2: {
+                                path: Array.isArray(proxy['h2-opts']?.path)
+                                    ? proxy['h2-opts']?.path[0]
+                                    : proxy['h2-opts']?.path,
+                                headers: {
+                                    Host: Array.isArray(
+                                        proxy['h2-opts']?.headers?.host,
+                                    )
+                                        ? proxy['h2-opts']?.headers?.host[0]
+                                        : proxy['h2-opts']?.headers?.host,
+                                },
+                                sni: proxy.sni,
+                                skip_tls_verify: proxy['skip-cert-verify'],
+                            },
+                        };
                     }
                     proxy = {
                         type: 'trojan',
@@ -207,11 +241,12 @@ export default function Egern_Producer() {
                         password: proxy.password,
                         tfo: proxy.tfo || proxy['fast-open'],
                         udp_relay:
-                            proxy.udp || proxy.udp_relay || proxy.udp_relay,
+                            proxy.udp || proxy.udp_relay || proxy['udp-relay'],
                         next_hop: proxy.next_hop,
                         sni: proxy.sni,
                         skip_tls_verify: proxy['skip-cert-verify'],
                         websocket: proxy.websocket,
+                        transport: proxy.transport,
                     };
                 } else if (proxy.type === 'anytls') {
                     proxy = {
@@ -222,7 +257,7 @@ export default function Egern_Producer() {
                         password: proxy.password,
                         tfo: proxy.tfo || proxy['fast-open'],
                         udp_relay:
-                            proxy.udp || proxy.udp_relay || proxy.udp_relay,
+                            proxy.udp || proxy.udp_relay || proxy['udp-relay'],
                         next_hop: proxy.next_hop,
                         sni: proxy.sni,
                         skip_tls_verify: proxy['skip-cert-verify'],
@@ -281,11 +316,12 @@ export default function Egern_Producer() {
                                     : proxy['h2-opts']?.path,
                                 headers: {
                                     Host: Array.isArray(
-                                        proxy['h2-opts']?.headers?.Host,
+                                        proxy['h2-opts']?.headers?.host,
                                     )
-                                        ? proxy['h2-opts']?.headers?.Host[0]
-                                        : proxy['h2-opts']?.headers?.Host,
+                                        ? proxy['h2-opts']?.headers?.host[0]
+                                        : proxy['h2-opts']?.headers?.host,
                                 },
+                                sni: proxy.sni,
                                 skip_tls_verify: proxy['skip-cert-verify'],
                             },
                         };
@@ -318,7 +354,7 @@ export default function Egern_Producer() {
                         tfo: proxy.tfo || proxy['fast-open'],
                         legacy,
                         udp_relay:
-                            proxy.udp || proxy.udp_relay || proxy.udp_relay,
+                            proxy.udp || proxy.udp_relay || proxy['udp-relay'],
                         next_hop: proxy.next_hop,
                         transport: proxy.transport,
                         // sni: proxy.sni,
@@ -357,6 +393,23 @@ export default function Egern_Producer() {
                                 skip_tls_verify: proxy['skip-cert-verify'],
                             },
                         };
+                    } else if (proxy.network === 'h2') {
+                        proxy.transport = {
+                            http2: {
+                                path: Array.isArray(proxy['h2-opts']?.path)
+                                    ? proxy['h2-opts']?.path[0]
+                                    : proxy['h2-opts']?.path,
+                                headers: {
+                                    Host: Array.isArray(
+                                        proxy['h2-opts']?.headers?.host,
+                                    )
+                                        ? proxy['h2-opts']?.headers?.host[0]
+                                        : proxy['h2-opts']?.headers?.host,
+                                },
+                                sni: proxy.sni,
+                                skip_tls_verify: proxy['skip-cert-verify'],
+                            },
+                        };
                     } else if (proxy.network === 'tcp' || !proxy.network) {
                         let reality;
                         if (
@@ -389,7 +442,7 @@ export default function Egern_Producer() {
                         security: proxy.cipher,
                         tfo: proxy.tfo || proxy['fast-open'],
                         udp_relay:
-                            proxy.udp || proxy.udp_relay || proxy.udp_relay,
+                            proxy.udp || proxy.udp_relay || proxy['udp-relay'],
                         next_hop: proxy.next_hop,
                         transport: proxy.transport,
                         flow,

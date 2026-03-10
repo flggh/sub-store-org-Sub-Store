@@ -24,7 +24,7 @@ function createModule(req, res) {
     const module = req.body;
     module.name = `${module.name ?? hex_md5(JSON.stringify(module))}`;
     $.info(`正在创建模块：${module.name}`);
-    const allModules = $.read(MODULES_KEY);
+    const allModules = $.read(MODULES_KEY) || [];
     if (findByName(allModules, module.name)) {
         return failed(
             res,
@@ -43,7 +43,7 @@ function createModule(req, res) {
 
 function getModule(req, res) {
     let { name } = req.params;
-    const allModules = $.read(MODULES_KEY);
+    const allModules = $.read(MODULES_KEY) || [];
     const module = findByName(allModules, name);
     if (module) {
         res.set('Content-Type', 'text/plain; charset=utf-8').send(
@@ -64,7 +64,7 @@ function getModule(req, res) {
 function updateModule(req, res) {
     let { name } = req.params;
     let module = req.body;
-    const allModules = $.read(MODULES_KEY);
+    const allModules = $.read(MODULES_KEY) || [];
     const oldModule = findByName(allModules, name);
     if (oldModule) {
         const newModule = {
@@ -91,14 +91,14 @@ function updateModule(req, res) {
 function deleteModule(req, res) {
     let { name } = req.params;
     $.info(`正在删除模块：${name}`);
-    let allModules = $.read(MODULES_KEY);
+    let allModules = $.read(MODULES_KEY) || [];
     deleteByName(allModules, name);
     $.write(allModules, MODULES_KEY);
     success(res);
 }
 
 function getAllModules(req, res) {
-    const allModules = $.read(MODULES_KEY);
+    const allModules = $.read(MODULES_KEY) || [];
     success(
         res,
         // eslint-disable-next-line no-unused-vars
@@ -108,6 +108,7 @@ function getAllModules(req, res) {
 
 function replaceModule(req, res) {
     const allModules = req.body;
+    if (!Array.isArray(allModules)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
     $.write(allModules, MODULES_KEY);
     success(res);
 }

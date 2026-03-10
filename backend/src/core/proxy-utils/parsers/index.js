@@ -18,6 +18,14 @@ import _ from 'lodash';
 
 import { Base64 } from 'js-base64';
 
+// 只在第一个 = 处分割，保留值中的 = 字符（如 Base64 编码的 WireGuard 密钥）
+function splitKV(str) {
+    const idx = str.indexOf('=');
+    return idx >= 0
+        ? [str.substring(0, idx), str.substring(idx + 1)]
+        : [str];
+}
+
 function surge_port_hopping(raw) {
     const [parts, port_hopping] =
         raw.match(
@@ -44,7 +52,7 @@ function URI_PROXY() {
         // eslint-disable-next-line no-unused-vars
         let [__, type, tls, username, password, server, port, query, name] =
             line.match(
-                /^(socks5|http|http)(\+tls|s)?:\/\/(?:(.*?):(.*?)@)?(.*?)(?::(\d+?))?\/?(\?.*?)?(?:#(.*?))?$/,
+                /^(socks5|http)(\+tls|s)?:\/\/(?:(.*?):(.*?)@)?(.*?)(?::(\d+?))?\/?(\?.*?)?(?:#(.*?))?$/,
             );
         if (port) {
             port = parseInt(port, 10);
@@ -177,18 +185,22 @@ function URI_SS() {
         const params = {};
         for (const addon of query.replace(/^\?/, '').split('&')) {
             if (addon) {
-                const [key, valueRaw] = addon.split('=');
+                const [key, valueRaw] = splitKV(addon);
                 let value = valueRaw;
-                value = decodeURIComponent(valueRaw);
+                if (value !== undefined) {
+                    value = decodeURIComponent(valueRaw);
+                }
                 params[key] = value;
             }
         }
         proxy.tls = params.security && params.security !== 'none';
-        proxy['skip-cert-verify'] = !!params['allowInsecure'];
+        proxy['skip-cert-verify'] = params['allowInsecure'] != null
+            ? /(TRUE)|1/i.test(params['allowInsecure'])
+            : undefined;
         proxy.sni = params['sni'] || params['peer'];
         proxy['client-fingerprint'] = params.fp;
         proxy.alpn = params.alpn
-            ? decodeURIComponent(params.alpn).split(',')
+            ? params.alpn.split(',')
             : undefined;
 
         if (params['ws']) {
@@ -214,14 +226,14 @@ function URI_SS() {
                     _.set(
                         proxy,
                         proxy.network + '-opts.path',
-                        decodeURIComponent(params['path']),
+                        params['path'],
                     );
                 }
                 if (params['host']) {
                     _.set(
                         proxy,
                         proxy.network + '-opts.headers.Host',
-                        decodeURIComponent(params['host']),
+                        params['host'],
                     );
                 }
                 if (httpupgrade) {
@@ -265,10 +277,11 @@ function URI_SS() {
         const serverAndPort = serverAndPortArray[1];
         const portIdx = serverAndPort.lastIndexOf(':');
         proxy.server = serverAndPort.substring(0, portIdx);
-        proxy.port = `${serverAndPort.substring(portIdx + 1)}`.match(
-            /\d+/,
-        )?.[0];
-        let userInfo = userInfoStr.match(/(^.*?):(.*$)/);
+        proxy.port = parseInt(
+            `${serverAndPort.substring(portIdx + 1)}`.match(/\d+/)?.[0],
+            10,
+        );
+        let userInfo = userInfoStr?.match(/(^.*?):(.*$)/);
         proxy.cipher = userInfo?.[1];
         proxy.password = userInfo?.[2];
         // if (!proxy.cipher || !proxy.password) {
@@ -287,7 +300,7 @@ function URI_SS() {
             ).split(';');
             const params = {};
             for (const item of pluginInfo) {
-                const [key, val] = item.split('=');
+                const [key, val] = splitKV(item);
                 if (key) params[key] = val || true; // some options like "tls" will not have value
             }
             switch (params.plugin) {
@@ -390,7 +403,7 @@ function URI_SSR() {
         let proxy = {
             type: 'ssr',
             server,
-            port,
+            port: parseInt(port, 10),
             protocol: params[0],
             cipher: params[1],
             obfs: params[2],
@@ -398,10 +411,11 @@ function URI_SSR() {
         };
         // get other params
         const other_params = {};
-        line = line.split('/?')[1].split('&');
-        if (line.length > 1) {
+        const queryPart = line.split('/?')[1];
+        line = queryPart ? queryPart.split('&') : [];
+        if (line.length > 0) {
             for (const item of line) {
-                let [key, val] = item.split('=');
+                let [key, val] = splitKV(item);
                 val = val.trim();
                 if (val.length > 0 && val !== '(null)') {
                     other_params[key] = val;
@@ -445,7 +459,7 @@ function URI_VMess() {
             const params = {};
             for (const part of partitions) {
                 if (part.indexOf('=') !== -1) {
-                    const [key, val] = part.split('=');
+                    const [key, val] = splitKV(part);
                     params[key.trim()] = val.trim();
                 }
             }
@@ -454,14 +468,14 @@ function URI_VMess() {
                 name: partitions[0].split('=')[0].trim(),
                 type: 'vmess',
                 server: partitions[1],
-                port: partitions[2],
+                port: parseInt(partitions[2], 10),
                 cipher: getIfNotBlank(partitions[3], 'auto'),
                 uuid: partitions[4].match(/^"(.*)"$/)[1],
                 tls: params.obfs === 'wss',
                 udp: getIfPresent(params['udp-relay']),
                 tfo: getIfPresent(params['fast-open']),
                 'skip-cert-verify': isPresent(params['tls-verification'])
-                    ? !params['tls-verification']
+                    ? !/true/i.test(params['tls-verification'])
                     : undefined,
             };
 
@@ -469,6 +483,7 @@ function URI_VMess() {
             if (isPresent(params.obfs)) {
                 if (params.obfs === 'ws' || params.obfs === 'wss') {
                     proxy.network = 'ws';
+                    proxy['ws-opts'] = {};
                     proxy['ws-opts'].path = (
                         getIfNotBlank(params['obfs-path']) || '"/"'
                     ).match(/^"(.*)"$/)[1];
@@ -501,10 +516,14 @@ function URI_VMess() {
                 content = Base64.decode(base64Line);
 
                 for (const addon of qs.split('&')) {
-                    const [key, valueRaw] = addon.split('=');
+                    const [key, valueRaw] = splitKV(addon);
                     let value = valueRaw;
-                    value = decodeURIComponent(valueRaw);
-                    if (value.indexOf(',') === -1) {
+                    if (value !== undefined) {
+                        value = decodeURIComponent(valueRaw);
+                    }
+                    if (value == null) {
+                        // skip undefined/null values
+                    } else if (value.indexOf(',') === -1) {
                         params[key] = value;
                     } else {
                         params[key] = value.split(',');
@@ -547,7 +566,7 @@ function URI_VMess() {
                 ),
                 tls: ['tls', true, 1, '1'].includes(params.tls),
                 'skip-cert-verify': isPresent(params.verify_cert)
-                    ? !params.verify_cert
+                    ? !/(TRUE)|1/i.test(params.verify_cert)
                     : undefined,
             };
             if (!proxy['skip-cert-verify'] && isPresent(params.allowInsecure)) {
@@ -711,9 +730,11 @@ function URI_VLESS() {
         const params = {};
         for (const addon of addons.split('&')) {
             if (addon) {
-                const [key, valueRaw] = addon.split('=');
+                const [key, valueRaw] = splitKV(addon);
                 let value = valueRaw;
-                value = decodeURIComponent(valueRaw);
+                if (value !== undefined) {
+                    value = decodeURIComponent(valueRaw);
+                }
                 params[key] = value;
             }
         }
@@ -742,7 +763,9 @@ function URI_VLESS() {
         }
         proxy['client-fingerprint'] = params.fp;
         proxy.alpn = params.alpn ? params.alpn.split(',') : undefined;
-        proxy['skip-cert-verify'] = /(TRUE)|1/i.test(params.allowInsecure);
+        proxy['skip-cert-verify'] = params.allowInsecure != null
+            ? /(TRUE)|1/i.test(params.allowInsecure)
+            : undefined;
         proxy._echConfigList = getIfPresent(params.ech);
         proxy._pcs = getIfPresent(params.pcs);
         proxy._h2 = /(TRUE)|1/i.test(params.h2);
@@ -865,7 +888,6 @@ function URI_AnyTLS() {
         if (isNaN(port)) {
             port = 443;
         }
-        password = decodeURIComponent(password);
         if (name != null) {
             name = decodeURIComponent(name);
         }
@@ -883,9 +905,11 @@ function URI_AnyTLS() {
 
         for (const addon of addons.split('&')) {
             if (addon) {
-                let [key, value] = addon.split('=');
+                let [key, value] = splitKV(addon);
                 key = key.replace(/_/g, '-');
-                value = decodeURIComponent(value);
+                if (value !== undefined) {
+                    value = decodeURIComponent(value);
+                }
                 if (['alpn'].includes(key)) {
                     proxy[key] = value ? value.split(',') : undefined;
                 } else if (['insecure'].includes(key)) {
@@ -967,9 +991,11 @@ function URI_Hysteria2() {
         const params = {};
         for (const addon of addons.split('&')) {
             if (addon) {
-                const [key, valueRaw] = addon.split('=');
+                const [key, valueRaw] = splitKV(addon);
                 let value = valueRaw;
-                value = decodeURIComponent(valueRaw);
+                if (value !== undefined) {
+                    value = decodeURIComponent(valueRaw);
+                }
                 params[key] = value;
             }
         }
@@ -985,8 +1011,13 @@ function URI_Hysteria2() {
             proxy.ports = params.mport;
         }
         proxy['obfs-password'] = params['obfs-password'];
-        proxy['skip-cert-verify'] = /(TRUE)|1/i.test(params.insecure);
-        proxy.tfo = /(TRUE)|1/i.test(params.fastopen);
+        proxy['skip-cert-verify'] = params.insecure != null
+            ? /(TRUE)|1/i.test(params.insecure)
+            : undefined;
+        proxy.tfo = params.fastopen != null
+            ? /(TRUE)|1/i.test(params.fastopen)
+            : undefined;
+        proxy.alpn = params.alpn ? params.alpn.split(',') : undefined;
         proxy['tls-fingerprint'] = params.pinSHA256;
         let hop_interval = params['hop-interval'] || params['hop_interval'];
 
@@ -1031,9 +1062,11 @@ function URI_Hysteria() {
         const params = {};
         for (const addon of addons.split('&')) {
             if (addon) {
-                let [key, value] = addon.split('=');
-                key = key.replace(/_/, '-');
-                value = decodeURIComponent(value);
+                let [key, value] = splitKV(addon);
+                key = key.replace(/_/g, '-');
+                if (value !== undefined) {
+                    value = decodeURIComponent(value);
+                }
                 if (['alpn'].includes(key)) {
                     proxy[key] = value ? value.split(',') : undefined;
                 } else if (['insecure'].includes(key)) {
@@ -1051,8 +1084,8 @@ function URI_Hysteria() {
                 } else if (['obfs'].includes(key)) {
                     // obfs: Obfuscation mode (optional, empty or "xplus")
                     proxy['_obfs'] = value || '';
-                } else if (['fast-open', 'peer'].includes(key)) {
-                    params[key] = value;
+                } else if (['fast-open', 'fastopen', 'peer'].includes(key)) {
+                    params[key === 'fastopen' ? 'fast-open' : key] = value;
                 } else if (!Object.keys(proxy).includes(key)) {
                     proxy[key] = value;
                 }
@@ -1062,8 +1095,8 @@ function URI_Hysteria() {
         if (!proxy.sni && params.peer) {
             proxy.sni = params.peer;
         }
-        if (!proxy['fast-open'] && params.fastopen) {
-            proxy['fast-open'] = true;
+        if (!proxy['fast-open'] && params['fast-open']) {
+            proxy['fast-open'] = /(TRUE)|1/i.test(params['fast-open']);
         }
         if (!proxy.protocol) {
             // protocol: protocol to use ("udp", "wechat-video", "faketcp") (optional, default: "udp")
@@ -1091,7 +1124,6 @@ function URI_TUIC() {
         if (isNaN(port)) {
             port = 443;
         }
-        password = decodeURIComponent(password);
         if (name != null) {
             name = decodeURIComponent(name);
         }
@@ -1108,15 +1140,17 @@ function URI_TUIC() {
 
         for (const addon of addons.split('&')) {
             if (addon) {
-                let [key, value] = addon.split('=');
+                let [key, value] = splitKV(addon);
                 key = key.replace(/_/g, '-');
-                value = decodeURIComponent(value);
+                if (value !== undefined) {
+                    value = decodeURIComponent(value);
+                }
                 if (['alpn'].includes(key)) {
                     proxy[key] = value ? value.split(',') : undefined;
                 } else if (['allow-insecure', 'insecure'].includes(key)) {
                     proxy['skip-cert-verify'] = /(TRUE)|1/i.test(value);
                 } else if (['fast-open'].includes(key)) {
-                    proxy.tfo = true;
+                    proxy.tfo = /(TRUE)|1/i.test(value);
                 } else if (['disable-sni', 'reduce-rtt'].includes(key)) {
                     proxy[key] = /(TRUE)|1/i.test(value);
                 } else if (key === 'congestion-control') {
@@ -1157,7 +1191,9 @@ function URI_WireGuard() {
         if (isNaN(port)) {
             port = 51820;
         }
-        privateKey = decodeURIComponent(privateKey);
+        if (privateKey != null) {
+            privateKey = decodeURIComponent(privateKey);
+        }
         if (name != null) {
             name = decodeURIComponent(name);
         }
@@ -1172,9 +1208,11 @@ function URI_WireGuard() {
         };
         for (const addon of addons.split('&')) {
             if (addon) {
-                let [key, value] = addon.split('=');
-                key = key.replace(/_/, '-');
-                value = decodeURIComponent(value);
+                let [key, value] = splitKV(addon);
+                key = key.replace(/_/g, '-');
+                if (value !== undefined) {
+                    value = decodeURIComponent(value);
+                }
                 if (['reserved'].includes(key)) {
                     const parsed = value
                         .split(',')
@@ -1226,14 +1264,19 @@ function URI_Trojan() {
     };
 
     const parse = (line) => {
-        const matched = /^(trojan:\/\/.*?@.*?)(:(\d+))?\/?(\?.*?)?$/.exec(line);
-        const port = matched?.[2];
-        if (!port) {
-            line = line.replace(matched[1], `${matched[1]}:443`);
+        // 先分离 fragment，避免 # 后的内容干扰端口检测
+        let [mainPart, name] = line.split(/#(.+)/, 2);
+        const matched =
+            /^(trojan:\/\/.*?@.*?)(:(\d+))?\/?(\?.*?)?$/.exec(mainPart);
+        if (!matched) {
+            throw new Error(`Invalid trojan URI: ${line}`);
         }
-        let [newLine, name] = line.split(/#(.+)/, 2);
+        const port = matched[2];
+        if (!port) {
+            mainPart = mainPart.replace(matched[1], `${matched[1]}:443`);
+        }
         const parser = getTrojanURIParser();
-        const proxy = parser.parse(newLine);
+        const proxy = parser.parse(mainPart);
         if (isNotBlank(name)) {
             try {
                 proxy.name = decodeURIComponent(name);
@@ -1500,6 +1543,7 @@ function Loon_WireGuard() {
         let peers = line.match(
             /,\s*?peers\s*?=\s*?\[\s*?\{\s*?(.+?)\s*?\}\s*?\]/i,
         )?.[1];
+        if (!peers) return;
         let serverPort = peers.match(
             /(,|^)\s*?endpoint\s*?=\s*?"?(.+?):(\d+)"?\s*?(,|$)/i,
         );
@@ -1585,7 +1629,6 @@ function Loon_WireGuard() {
             ],
         };
 
-        proxy;
         if (Array.isArray(proxy.dns) && proxy.dns.length > 0) {
             proxy['remote-dns-resolve'] = true;
         }

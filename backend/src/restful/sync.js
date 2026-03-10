@@ -16,7 +16,7 @@ import { syncToGist } from '@/restful/artifacts';
 
 export default function register($app) {
     // Initialization
-    if (!$.read(ARTIFACTS_KEY)) $.write({}, ARTIFACTS_KEY);
+    if (!$.read(ARTIFACTS_KEY)) $.write([], ARTIFACTS_KEY);
 
     // sync all artifacts
     $app.get('/api/sync/artifacts', syncAllArtifacts);
@@ -47,7 +47,7 @@ async function produceArtifact({
     if (['subscription', 'sub'].includes(type)) {
         let sub;
         if (name) {
-            const allSubs = $.read(SUBS_KEY);
+            const allSubs = $.read(SUBS_KEY) || [];
             sub = findByName(allSubs, name);
             if (!sub) throw new Error(`找不到订阅 ${name}`);
         } else if (subscription) {
@@ -121,7 +121,7 @@ async function produceArtifact({
         } else {
             const errors = {};
             raw = await Promise.all(
-                sub.url
+                `${sub.url || ''}`
                     .split(/[\r\n]+/)
                     .map((i) => i.trim())
                     .filter((i) => i.length)
@@ -217,11 +217,13 @@ async function produceArtifact({
         // produce
         return ProxyUtils.produce(proxies, platform, produceType, produceOpts);
     } else if (['collection', 'col'].includes(type)) {
-        const allSubs = $.read(SUBS_KEY);
-        const allCols = $.read(COLLECTIONS_KEY);
+        const allSubs = $.read(SUBS_KEY) || [];
+        const allCols = $.read(COLLECTIONS_KEY) || [];
         const collection = findByName(allCols, name);
         if (!collection) throw new Error(`找不到组合订阅 ${name}`);
-        const subnames = [...collection.subscriptions];
+        const subnames = Array.isArray(collection.subscriptions)
+            ? [...collection.subscriptions]
+            : [];
         let subscriptionTags = collection.subscriptionTags;
         if (Array.isArray(subscriptionTags) && subscriptionTags.length > 0) {
             allSubs.forEach((sub) => {
@@ -242,6 +244,9 @@ async function produceArtifact({
         await Promise.all(
             subnames.map(async (name) => {
                 const sub = findByName(allSubs, name);
+                if (!sub) {
+                    throw new Error(`找不到订阅 ${name}`);
+                }
                 const passThroughUA = sub.passThroughUA;
                 let reqUA = sub.ua;
                 if (passThroughUA) {
@@ -262,8 +267,8 @@ async function produceArtifact({
                         raw = sub.content;
                     } else {
                         const errors = {};
-                        raw = await await Promise.all(
-                            sub.url
+                        raw = await Promise.all(
+                            `${sub.url || ''}`
                                 .split(/[\r\n]+/)
                                 .map((i) => i.trim())
                                 .filter((i) => i.length)
@@ -343,7 +348,7 @@ async function produceArtifact({
                     processed++;
                     $.info(
                         `✅ 子订阅：${sub.name}加载成功，进度--${
-                            100 * (processed / subnames.length).toFixed(1)
+                            ((100 * processed) / subnames.length).toFixed(1)
                         }% `,
                     );
                 } catch (err) {
@@ -353,7 +358,7 @@ async function produceArtifact({
                         `❌ 处理组合订阅中的子订阅: ${
                             sub.name
                         }时出现错误：${err}！进度--${
-                            100 * (processed / subnames.length).toFixed(1)
+                            ((100 * processed) / subnames.length).toFixed(1)
                         }%`,
                     );
                 }
@@ -423,15 +428,16 @@ async function produceArtifact({
         }
         return ProxyUtils.produce(proxies, platform, produceType, produceOpts);
     } else if (type === 'rule') {
-        const allRules = $.read(RULES_KEY);
+        const allRules = $.read(RULES_KEY) || [];
         const rule = findByName(allRules, name);
         if (!rule) throw new Error(`找不到规则 ${name}`);
         let rules = [];
-        for (let i = 0; i < rule.urls.length; i++) {
-            const url = rule.urls[i];
+        const ruleUrls = Array.isArray(rule.urls) ? rule.urls : [];
+        for (let i = 0; i < ruleUrls.length; i++) {
+            const url = ruleUrls[i];
             $.info(
                 `正在处理URL：${url}，进度--${
-                    100 * ((i + 1) / rule.urls.length).toFixed(1)
+                    ((100 * (i + 1)) / ruleUrls.length).toFixed(1)
                 }% `,
             );
             try {
@@ -445,13 +451,19 @@ async function produceArtifact({
             }
         }
         // remove duplicates
-        rules = await RuleUtils.process(rules, [
-            { type: 'Remove Duplicate Filter' },
-        ]);
+        rules = rules.filter(
+            (rule, index, self) =>
+                index ===
+                self.findIndex(
+                    (r) =>
+                        r.type === rule.type &&
+                        r.content === rule.content,
+                ),
+        );
         // produce output
         return RuleUtils.produce(rules, platform);
     } else if (type === 'file') {
-        const allFiles = $.read(FILES_KEY);
+        const allFiles = $.read(FILES_KEY) || [];
         const file = findByName(allFiles, name);
         if (!file) throw new Error(`找不到文件 ${name}`);
         let raw = '';
@@ -518,7 +530,7 @@ async function produceArtifact({
             } else {
                 const errors = {};
                 raw = await Promise.all(
-                    file.url
+                    `${file.url || ''}`
                         .split(/[\r\n]+/)
                         .map((i) => i.trim())
                         .filter((i) => i.length)
@@ -602,14 +614,14 @@ async function produceArtifact({
 
 async function syncArtifacts() {
     $.info('开始同步所有远程配置...');
-    const allArtifacts = $.read(ARTIFACTS_KEY);
+    const allArtifacts = $.read(ARTIFACTS_KEY) || [];
     const files = {};
 
     try {
         const valid = [];
         const invalid = [];
-        const allSubs = $.read(SUBS_KEY);
-        const allCols = $.read(COLLECTIONS_KEY);
+        const allSubs = $.read(SUBS_KEY) || [];
+        const allCols = $.read(COLLECTIONS_KEY) || [];
         const subNames = [];
         let enabledCount = 0;
         allArtifacts.map((artifact) => {
@@ -793,7 +805,7 @@ async function syncAllArtifacts(_, res) {
 async function syncArtifact(req, res) {
     let { name } = req.params;
     $.info(`开始同步远程配置 ${name}...`);
-    const allArtifacts = $.read(ARTIFACTS_KEY);
+    const allArtifacts = $.read(ARTIFACTS_KEY) || [];
     const artifact = findByName(allArtifacts, name);
 
     if (!artifact) {

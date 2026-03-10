@@ -87,21 +87,22 @@ function shadowsocks(proxy) {
     // obfs
     if (isPresent(proxy, 'plugin')) {
         if (proxy.plugin === 'obfs') {
-            if (
-                proxy['plugin-opts']?.mode &&
-                proxy.cipher.startsWith('2022-')
-            ) {
+            if (!proxy['plugin-opts']) {
+                throw new Error(`plugin obfs requires plugin-opts`);
+            }
+            const pluginOpts = proxy['plugin-opts'];
+            if (pluginOpts.mode && proxy.cipher.startsWith('2022-')) {
                 throw new Error(
                     `${proxy.cipher} ${proxy.plugin} is not supported`,
                 );
             }
-            result.append(`,obfs-name=${proxy['plugin-opts'].mode}`);
+            result.append(`,obfs-name=${pluginOpts.mode}`);
             result.appendIfPresent(
-                `,obfs-host=${proxy['plugin-opts'].host}`,
+                `,obfs-host=${pluginOpts.host}`,
                 'plugin-opts.host',
             );
             result.appendIfPresent(
-                `,obfs-uri=${proxy['plugin-opts'].path}`,
+                `,obfs-uri=${pluginOpts.path}`,
                 'plugin-opts.path',
             );
         } else if (!['shadow-tls'].includes(proxy.plugin)) {
@@ -673,11 +674,10 @@ function wireguard(proxy) {
     }
     result.appendIfPresent(`,dns=${proxy.dns}`, 'dns');
     result.appendIfPresent(`,dnsv6=${proxy.dnsv6}`, 'dnsv6');
-    result.appendIfPresent(
-        `,keepalive=${proxy['persistent-keepalive']}`,
-        'persistent-keepalive',
-    );
-    result.appendIfPresent(`,keepalive=${proxy.keepalive}`, 'keepalive');
+    const keepalive = proxy['persistent-keepalive'] ?? proxy.keepalive;
+    if (keepalive != null) {
+        result.append(`,keepalive=${keepalive}`);
+    }
     const allowedIps = Array.isArray(proxy['allowed-ips'])
         ? proxy['allowed-ips'].join(',')
         : proxy['allowed-ips'];
@@ -712,7 +712,7 @@ function wireguard(proxy) {
 }
 
 function hysteria2(proxy) {
-    if (proxy['obfs-password'] && proxy.obfs != 'salamander') {
+    if (proxy['obfs-password'] && proxy.obfs !== 'salamander') {
         throw new Error(`only salamander obfs is supported`);
     }
     const result = new Result(proxy);
@@ -735,7 +735,7 @@ function hysteria2(proxy) {
         'skip-cert-verify',
     );
 
-    if (proxy['obfs-password'] && proxy.obfs == 'salamander') {
+    if (proxy['obfs-password'] && proxy.obfs === 'salamander') {
         result.append(`,salamander-password=${proxy['obfs-password']}`);
     }
 

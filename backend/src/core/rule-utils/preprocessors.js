@@ -8,7 +8,7 @@ function HTML() {
 
 function ClashProvider() {
     const name = 'Clash Provider';
-    const test = (raw) => /^payload:/gm.exec(raw).index >= 0;
+    const test = (raw) => /^payload:/gm.test(raw);
     const parse = (raw) => {
         return raw.replace('payload:', '').replace(/^\s*-\s*/gm, '');
     };

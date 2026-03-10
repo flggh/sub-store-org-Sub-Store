@@ -41,24 +41,25 @@ function deepMerge(target, _other) {
                 target[k] = other[key];
             } else {
                 const k = trimWrap(key);
-                if (!target[k]) Object.assign(target, { [k]: {} });
+                if (target[k] == null) Object.assign(target, { [k]: {} });
                 deepMerge(target[k], other[k]);
             }
         } else if (Array.isArray(other[key])) {
             if (key.startsWith('+')) {
                 const k = trimWrap(key.slice(1));
-                if (!target[k]) Object.assign(target, { [k]: [] });
+                if (target[k] == null) Object.assign(target, { [k]: [] });
                 target[k] = [...other[key], ...target[k]];
             } else if (key.endsWith('+')) {
                 const k = trimWrap(key.slice(0, -1));
-                if (!target[k]) Object.assign(target, { [k]: [] });
+                if (target[k] == null) Object.assign(target, { [k]: [] });
                 target[k] = [...target[k], ...other[key]];
             } else {
                 const k = trimWrap(key);
                 Object.assign(target, { [k]: other[key] });
             }
         } else {
-            Object.assign(target, { [key]: other[key] });
+            const k = trimWrap(key);
+            Object.assign(target, { [k]: other[key] });
         }
     }
     return target;
@@ -104,7 +105,7 @@ function isMatch(rule, proxy) {
                 return proxy[rule.attr] === rule.value;
             case 'EXISTS':
                 return (
-                    proxy[rule.attr] !== null ||
+                    proxy[rule.attr] !== null &&
                     typeof proxy[rule.attr] !== 'undefined'
                 );
             default:
@@ -308,7 +309,7 @@ function RegexSortOperator(input) {
                 const oB = getRegexOrder(expressions, b.name);
                 if (oA && !oB) return -1;
                 if (oB && !oA) return 1;
-                if (oA && oB) return oA < oB ? -1 : 1;
+                if (oA && oB) return oA < oB ? -1 : oA > oB ? 1 : 0;
                 if (order === 'original') {
                     return 0;
                 } else if (order === 'desc') {
@@ -697,7 +698,7 @@ function ResolveDomainOperator({
     if (['IPv6', 'IP4P'].includes(_type) && ['IP-API'].includes(provider)) {
         throw new Error(`域名解析服务提供方 ${provider} 不支持 ${_type}`);
     }
-    const { defaultTimeout } = $.read(SETTINGS_KEY);
+    const { defaultTimeout } = $.read(SETTINGS_KEY) || {};
     const requestTimeout = timeout || defaultTimeout || 8000;
     let type = ['IPv6', 'IP4P'].includes(_type) ? 'IPv6' : 'IPv4';
 

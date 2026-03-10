@@ -58,7 +58,7 @@ export const RuleUtils = (function () {
                         return '';
                     }
                 })
-                .filter((line) => line.length > 0)
+                .filter((line) => line && line.length > 0)
                 .join('\n');
         } else if (producer.type === 'ALL') {
             return producer.func(rules);

@@ -21,6 +21,7 @@ async function getSettings(req, res) {
         if (!settings.avatarUrl) await updateAvatar();
         if (!settings.artifactStore) await updateArtifactStore();
 
+        settings = $.read(SETTINGS_KEY) || settings;
         success(res, settings);
     } catch (e) {
         $.error(`Failed to get settings: ${e.message ?? e}`);
@@ -79,7 +80,7 @@ async function updateSettings(req, res) {
 }
 
 export async function updateAvatar() {
-    const settings = $.read(SETTINGS_KEY);
+    const settings = $.read(SETTINGS_KEY) || {};
     const { githubUser: username, syncPlatform, githubProxy } = settings;
     if (username) {
         if (syncPlatform === 'gitlab') {
@@ -95,7 +96,7 @@ export async function updateAvatar() {
                         },
                     })
                     .then((resp) => JSON.parse(resp.body));
-                settings.avatarUrl = data[0]['avatar_url'].replace(
+                settings.avatarUrl = data?.[0]?.['avatar_url']?.replace(
                     /(\?|&)s=\d+(&|$)/,
                     '$1s=160$2',
                 );
@@ -137,7 +138,7 @@ export async function updateAvatar() {
 
 export async function updateArtifactStore() {
     $.log('Updating artifact store');
-    const settings = $.read(SETTINGS_KEY);
+    const settings = $.read(SETTINGS_KEY) || {};
     const { gistToken, syncPlatform } = settings;
     if (gistToken) {
         const manager = new Gist({
