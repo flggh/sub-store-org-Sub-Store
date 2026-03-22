@@ -13,6 +13,7 @@ import download from '@/utils/download';
 import { ProxyUtils } from '@/core/proxy-utils';
 import { RuleUtils } from '@/core/rule-utils';
 import { syncToGist } from '@/restful/artifacts';
+import { normalizeClashYaml } from '@/core/proxy-utils/preprocessors';
 
 export default function register($app) {
     // Initialization
@@ -607,6 +608,8 @@ async function produceArtifact({
                       file.process,
                   )
                 : { $content: filesContent, $files: files, $options };
+
+        processed.$content = normalizeClashYaml(processed?.$content ?? '');
 
         return (all ? processed : processed?.$content) ?? '';
     }
