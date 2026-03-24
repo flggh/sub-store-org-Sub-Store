@@ -22,6 +22,14 @@ const ipVersionParser = (proxy, parsedProxy) => {
         };
     }
 };
+const domainResolverParser = (proxy, parsedProxy) => {
+    if (proxy._domain_resolver) {
+        parsedProxy.domain_resolver = {
+            ...parsedProxy.domain_resolver,
+            ...proxy._domain_resolver,
+        };
+    }
+};
 const detourParser = (proxy, parsedProxy) => {
     parsedProxy.detour = proxy['dialer-proxy'] || proxy.detour;
 };
@@ -347,6 +355,7 @@ const sshParser = (proxy = {}) => {
     tfoParser(proxy, parsedProxy);
     detourParser(proxy, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     return parsedProxy;
 };
 
@@ -375,6 +384,7 @@ const httpParser = (proxy = {}) => {
     detourParser(proxy, parsedProxy);
     tlsParser(proxy, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     return parsedProxy;
 };
 
@@ -406,6 +416,7 @@ const socks5Parser = (proxy = {}) => {
     tfoParser(proxy, parsedProxy);
     detourParser(proxy, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     return parsedProxy;
 };
 
@@ -454,6 +465,7 @@ const shadowTLSParser = (proxy = {}) => {
     detourParser(proxy, stPart);
     smuxParser(proxy.smux, ssPart);
     ipVersionParser(proxy, stPart);
+    domainResolverParser(proxy, stPart);
     return { type: 'ss-with-st', ssPart, stPart };
 };
 const ssParser = (proxy = {}) => {
@@ -484,6 +496,7 @@ const ssParser = (proxy = {}) => {
     detourParser(proxy, parsedProxy);
     smuxParser(proxy.smux, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     if (proxy.plugin) {
         const pluginOpts = isPlainObject(proxy['plugin-opts'])
             ? { ...proxy['plugin-opts'] }
@@ -562,6 +575,7 @@ const ssrParser = (proxy = {}) => {
     detourParser(proxy, parsedProxy);
     smuxParser(proxy.smux, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     return parsedProxy;
 };
 
@@ -601,6 +615,7 @@ const vmessParser = (proxy = {}) => {
     tlsParser(proxy, parsedProxy);
     smuxParser(proxy.smux, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     return parsedProxy;
 };
 
@@ -629,6 +644,7 @@ const vlessParser = (proxy = {}) => {
     smuxParser(proxy.smux, parsedProxy);
     tlsParser(proxy, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     return parsedProxy;
 };
 const trojanParser = (proxy = {}) => {
@@ -653,6 +669,7 @@ const trojanParser = (proxy = {}) => {
     tlsParser(proxy, parsedProxy);
     smuxParser(proxy.smux, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     return parsedProxy;
 };
 const naiveParser = (proxy = {}) => {
@@ -695,6 +712,7 @@ const naiveParser = (proxy = {}) => {
     tlsParser(proxy, parsedProxy);
     smuxParser(proxy.smux, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     if (parsedProxy.tls?.insecure) {
         $.info(
             `Platform sing-box: insecure is not supported on naive outbound`,
@@ -761,6 +779,7 @@ const hysteriaParser = (proxy = {}) => {
     tfoParser(proxy, parsedProxy);
     smuxParser(proxy.smux, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     return parsedProxy;
 };
 const hysteria2Parser = (proxy = {}) => {
@@ -810,6 +829,7 @@ const hysteria2Parser = (proxy = {}) => {
     detourParser(proxy, parsedProxy);
     smuxParser(proxy.smux, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     return parsedProxy;
 };
 const tuic5Parser = (proxy = {}) => {
@@ -842,6 +862,7 @@ const tuic5Parser = (proxy = {}) => {
     tlsParser(proxy, parsedProxy);
     smuxParser(proxy.smux, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     return parsedProxy;
 };
 const anytlsParser = (proxy = {}) => {
@@ -867,6 +888,51 @@ const anytlsParser = (proxy = {}) => {
     detourParser(proxy, parsedProxy);
     tlsParser(proxy, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
+    return parsedProxy;
+};
+const tailscaleParser = (proxy = {}) => {
+    const parsedProxy = {
+        tag: proxy.name,
+        type: 'tailscale',
+        udp_timeout: proxy['udp-timeout'],
+        state_directory: proxy['state-directory'],
+        auth_key: proxy['auth-key'],
+        control_url: proxy['control-url'],
+        ephemeral: proxy.ephemeral,
+        hostname: proxy.hostname,
+        accept_routes: proxy['accept-routes'],
+        exit_node: proxy['exit-node'],
+        exit_node_allow_lan_access: proxy['exit-node-allow-lan-access'],
+        advertise_routes: Array.isArray(proxy['advertise-routes'])
+            ? proxy['advertise-routes']
+            : undefined,
+        advertise_exit_node: proxy['advertise-exit-node'],
+        advertise_tags: Array.isArray(proxy['advertise-tags'])
+            ? proxy['advertise-tags']
+            : undefined,
+        relay_server_static_endpoints: Array.isArray(
+            proxy['relay-server-static-endpoints'],
+        )
+            ? proxy['relay-server-static-endpoints']
+            : undefined,
+        system_interface: proxy['system-interface'],
+        system_interface_name: proxy['system-interface-name'],
+    };
+    if (/^\d+$/.test(proxy['system-interface-mtu']))
+        parsedProxy.system_interface_mtu = parseInt(
+            `${proxy['system-interface-mtu']}`,
+            10,
+        );
+    if (/^\d+$/.test(proxy['relay-server-port']))
+        parsedProxy.relay_server_port = parseInt(
+            `${proxy['relay-server-port']}`,
+            10,
+        );
+    networkParser(proxy, parsedProxy);
+    detourParser(proxy, parsedProxy);
+    ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     return parsedProxy;
 };
 
@@ -881,9 +947,7 @@ const wireguardParser = (proxy = {}) => {
     const parsedProxy = {
         system: !!proxy.system,
         mtu: proxy.mtu ? parseInt(`${proxy.mtu}`, 10) : undefined,
-        udp_timeout: proxy['udp-timeout']
-            ? parseInt(`${proxy['udp-timeout']}`, 10)
-            : undefined,
+        udp_timeout: proxy['udp-timeout'],
         workers: proxy['workers']
             ? parseInt(`${proxy['workers']}`, 10)
             : undefined,
@@ -964,6 +1028,7 @@ const wireguardParser = (proxy = {}) => {
     detourParser(proxy, parsedProxy);
     smuxParser(proxy.smux, parsedProxy);
     ipVersionParser(proxy, parsedProxy);
+    domainResolverParser(proxy, parsedProxy);
     delete parsedProxy.server;
     delete parsedProxy.server_port;
     delete parsedProxy.pre_shared_key;
@@ -1116,6 +1181,9 @@ export default function singbox_Producer() {
                         case 'anytls':
                             list.push(anytlsParser(proxy));
                             break;
+                        case 'tailscale':
+                            list.push(tailscaleParser(proxy));
+                            break;
                         default:
                             throw new Error(
                                 `Platform sing-box does not support proxy type: ${proxy.type}`,
@@ -1131,7 +1199,7 @@ export default function singbox_Producer() {
 
         const categorized = list.reduce(
             (result, item) => {
-                if (['wireguard'].includes(item.type)) {
+                if (['wireguard', 'tailscale'].includes(item.type)) {
                     result.endpoints.push(item);
                 } else {
                     result.outbounds.push(item);
