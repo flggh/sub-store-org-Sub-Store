@@ -132,7 +132,6 @@ async function processFn(
                         $arguments = parseBooleanStyleArgs(rawArgs[1]);
                     }
                 }
-                console.log(rawArgs);
                 url = `${url.split('#')[0]}${
                     rawArgs[2]
                         ? `#${rawArgs[2]}`
