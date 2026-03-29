@@ -20,7 +20,7 @@ describe('VMess and VLESS parser coverage', function () {
                 uuid: UUID,
                 udp: 'true',
                 tfo: 'true',
-                'skip-cert-verify': false,
+                'skip-cert-verify': true,
             });
         });
 
