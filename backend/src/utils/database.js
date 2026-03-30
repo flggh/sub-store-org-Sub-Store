@@ -17,3 +17,12 @@ export function updateByName(list, name, newItem, field = 'name') {
     const idx = findIndexByName(list, name, field);
     if (idx !== -1) list[idx] = newItem;
 }
+
+export function insertByPosition(list, item, position = 'bottom') {
+    if (position === 'top') {
+        list.unshift(item);
+        return;
+    }
+
+    list.push(item);
+}
