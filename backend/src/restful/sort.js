@@ -6,8 +6,8 @@ import {
     TOKENS_KEY,
 } from '@/constants';
 import $ from '@/core/app';
-import { failed, success } from '@/restful/response';
-import { RequestInvalidError } from '@/restful/errors';
+import { success } from '@/restful/response';
+import { sortArchiveEntries } from '@/utils/archive';
 
 export default function register($app) {
     $app.post('/api/sort/subs', sortSubs);
@@ -15,12 +15,12 @@ export default function register($app) {
     $app.post('/api/sort/artifacts', sortArtifacts);
     $app.post('/api/sort/files', sortFiles);
     $app.post('/api/sort/tokens', sortTokens);
+    $app.post('/api/sort/archives', sortArchive);
 }
 
 function sortSubs(req, res) {
     const orders = req.body;
-    if (!Array.isArray(orders)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
-    const allSubs = $.read(SUBS_KEY) || [];
+    const allSubs = $.read(SUBS_KEY);
     allSubs.sort((a, b) => orders.indexOf(a.name) - orders.indexOf(b.name));
     $.write(allSubs, SUBS_KEY);
     success(res, allSubs);
@@ -28,8 +28,7 @@ function sortSubs(req, res) {
 
 function sortCollections(req, res) {
     const orders = req.body;
-    if (!Array.isArray(orders)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
-    const allCols = $.read(COLLECTIONS_KEY) || [];
+    const allCols = $.read(COLLECTIONS_KEY);
     allCols.sort((a, b) => orders.indexOf(a.name) - orders.indexOf(b.name));
     $.write(allCols, COLLECTIONS_KEY);
     success(res, allCols);
@@ -37,8 +36,7 @@ function sortCollections(req, res) {
 
 function sortArtifacts(req, res) {
     const orders = req.body;
-    if (!Array.isArray(orders)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
-    const allArtifacts = $.read(ARTIFACTS_KEY) || [];
+    const allArtifacts = $.read(ARTIFACTS_KEY);
     allArtifacts.sort(
         (a, b) => orders.indexOf(a.name) - orders.indexOf(b.name),
     );
@@ -48,8 +46,7 @@ function sortArtifacts(req, res) {
 
 function sortFiles(req, res) {
     const orders = req.body;
-    if (!Array.isArray(orders)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
-    const allFiles = $.read(FILES_KEY) || [];
+    const allFiles = $.read(FILES_KEY);
     allFiles.sort((a, b) => orders.indexOf(a.name) - orders.indexOf(b.name));
     $.write(allFiles, FILES_KEY);
     success(res, allFiles);
@@ -57,8 +54,7 @@ function sortFiles(req, res) {
 
 function sortTokens(req, res) {
     const orders = req.body;
-    if (!Array.isArray(orders)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
-    const allTokens = $.read(TOKENS_KEY) || [];
+    const allTokens = $.read(TOKENS_KEY);
     allTokens.sort(
         (a, b) =>
             orders.indexOf(`${a.type}-${a.name}-${a.token}`) -
@@ -66,4 +62,9 @@ function sortTokens(req, res) {
     );
     $.write(allTokens, TOKENS_KEY);
     success(res, allTokens);
+}
+
+function sortArchive(req, res) {
+    const entries = sortArchiveEntries(req.body);
+    success(res, entries);
 }

@@ -22,12 +22,12 @@ import {
     parseFlowHeaders,
     getRmainingDays,
 } from '@/utils/flow';
+import { archiveSubscription } from '@/utils/archive';
 import { success, failed } from './response';
 import $ from '@/core/app';
 import { formatDateTime } from '@/utils';
-import { parseBooleanStyleArgs } from '@/utils/parse';
 
-if (!$.read(SUBS_KEY)) $.write([], SUBS_KEY);
+if (!$.read(SUBS_KEY)) $.write({}, SUBS_KEY);
 
 export default function register($app) {
     $app.get('/api/sub/flow/:name', getFlowInfo);
@@ -50,7 +50,7 @@ async function getFlowInfo(req, res) {
     if (url) {
         $.info(`指定远程订阅 URL: ${url}`);
     }
-    const allSubs = $.read(SUBS_KEY) || [];
+    const allSubs = $.read(SUBS_KEY);
     const sub = findByName(allSubs, name);
     if (!sub) {
         failed(
@@ -121,7 +121,7 @@ async function getFlowInfo(req, res) {
     }
     try {
         url =
-            `${url || sub.url || ''}`
+            `${url || sub.url}`
                 .split(/[\r\n]+/)
                 .map((i) => i.trim())
                 .filter((i) => i.length)?.[0] || '';
@@ -134,7 +134,15 @@ async function getFlowInfo(req, res) {
                 // 支持 `#${encodeURIComponent(JSON.stringify({arg1: "1"}))}`
                 $arguments = JSON.parse(decodeURIComponent(rawArgs[1]));
             } catch (e) {
-                $arguments = parseBooleanStyleArgs(rawArgs[1]);
+                for (const pair of rawArgs[1].split('&')) {
+                    const key = pair.split('=')[0];
+                    const value = pair.split('=')[1];
+                    // 部分兼容之前的逻辑 const value = pair.split('=')[1] || true;
+                    $arguments[key] =
+                        value == null || value === ''
+                            ? true
+                            : decodeURIComponent(value);
+                }
             }
         }
         if ($arguments.noFlow || !/^https?/.test(url)) {
@@ -228,42 +236,21 @@ async function getFlowInfo(req, res) {
 }
 
 function createSubscription(req, res) {
-    const sub = req.body;
-    delete sub.subscriptions;
-    $.info(`正在创建订阅： ${sub.name}`);
-    if (/\//.test(sub.name)) {
-        failed(
-            res,
-            new RequestInvalidError(
-                'INVALID_NAME',
-                `Subscription ${sub.name} is invalid`,
-            ),
-        );
-        return;
+    try {
+        const sub = createSubscriptionItem(req.body);
+        success(res, sub, 201);
+    } catch (error) {
+        failed(res, error);
     }
-    const allSubs = $.read(SUBS_KEY) || [];
-    if (findByName(allSubs, sub.name)) {
-        failed(
-            res,
-            new RequestInvalidError(
-                'DUPLICATE_KEY',
-                `Subscription ${sub.name} already exists.`,
-            ),
-        );
-        return;
-    }
-    insertByPosition(allSubs, sub, getCreateItemPosition());
-    $.write(allSubs, SUBS_KEY);
-    success(res, sub, 201);
 }
 
 function getSubscription(req, res) {
     let { name } = req.params;
     let { raw } = req.query;
-    const allSubs = $.read(SUBS_KEY) || [];
+    const allSubs = $.read(SUBS_KEY);
     const sub = findByName(allSubs, name);
+    delete sub.subscriptions;
     if (sub) {
-        delete sub.subscriptions;
         if (raw) {
             res.set('content-type', 'application/json')
                 .set(
@@ -294,7 +281,7 @@ function updateSubscription(req, res) {
     let { name } = req.params;
     let sub = req.body;
     delete sub.subscriptions;
-    const allSubs = $.read(SUBS_KEY) || [];
+    const allSubs = $.read(SUBS_KEY);
     const oldSub = findByName(allSubs, name);
     if (oldSub) {
         if (!sub.name) sub.name = oldSub.name;
@@ -308,12 +295,9 @@ function updateSubscription(req, res) {
             // update all collections refer to this name
             const allCols = $.read(COLLECTIONS_KEY) || [];
             for (const collection of allCols) {
-                const subs = collection.subscriptions;
-                if (Array.isArray(subs)) {
-                    const idx = subs.indexOf(name);
-                    if (idx !== -1) {
-                        subs[idx] = sub.name;
-                    }
+                const idx = collection.subscriptions.indexOf(name);
+                if (idx !== -1) {
+                    collection.subscriptions[idx] = sub.name;
                 }
             }
 
@@ -322,7 +306,7 @@ function updateSubscription(req, res) {
             for (const artifact of allArtifacts) {
                 if (
                     artifact.type === 'subscription' &&
-                    artifact.source === name
+                    artifact.source == name
                 ) {
                     artifact.source = sub.name;
                 }
@@ -332,7 +316,7 @@ function updateSubscription(req, res) {
             for (const file of allFiles) {
                 if (
                     file.sourceType === 'subscription' &&
-                    file.sourceName === name
+                    file.sourceName == name
                 ) {
                     file.sourceName = sub.name;
                 }
@@ -358,31 +342,87 @@ function updateSubscription(req, res) {
 }
 
 function deleteSubscription(req, res) {
-    let { name } = req.params;
-    $.info(`删除订阅：${name}...`);
-    // delete from subscriptions
-    let allSubs = $.read(SUBS_KEY) || [];
-    deleteByName(allSubs, name);
-    $.write(allSubs, SUBS_KEY);
-    // delete from collections
-    const allCols = $.read(COLLECTIONS_KEY) || [];
-    for (const collection of allCols) {
-        collection.subscriptions = (collection.subscriptions || []).filter(
-            (s) => s !== name,
-        );
+    try {
+        const { name } = req.params;
+        $.info(`删除订阅：${name}...`);
+        if (shouldArchiveDeletion(req.query.mode)) {
+            archiveSubscription(name);
+        }
+        deleteSubscriptionItem(name);
+        success(res);
+    } catch (error) {
+        failed(res, error);
     }
-    $.write(allCols, COLLECTIONS_KEY);
-    success(res);
 }
 
 function getAllSubscriptions(req, res) {
-    const allSubs = $.read(SUBS_KEY) || [];
+    const allSubs = $.read(SUBS_KEY);
     success(res, allSubs);
 }
 
 function replaceSubscriptions(req, res) {
     const allSubs = req.body;
-    if (!Array.isArray(allSubs)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
     $.write(allSubs, SUBS_KEY);
     success(res);
 }
+
+function createSubscriptionItem(rawSub) {
+    const sub = {
+        ...rawSub,
+    };
+    delete sub.subscriptions;
+    $.info(`正在创建订阅： ${sub.name}`);
+    if (/\//.test(sub.name)) {
+        throw new RequestInvalidError(
+            'INVALID_NAME',
+            `Subscription ${sub.name} is invalid`,
+        );
+    }
+    const allSubs = $.read(SUBS_KEY);
+    if (findByName(allSubs, sub.name)) {
+        throw new RequestInvalidError(
+            'DUPLICATE_KEY',
+            `Subscription ${sub.name} already exists.`,
+        );
+    }
+    insertByPosition(allSubs, sub, getCreateItemPosition());
+    $.write(allSubs, SUBS_KEY);
+    return sub;
+}
+
+function deleteSubscriptionItem(name) {
+    const allSubs = $.read(SUBS_KEY);
+    const sub = findByName(allSubs, name);
+    if (!sub) {
+        throw new ResourceNotFoundError(
+            'RESOURCE_NOT_FOUND',
+            `Subscription ${name} does not exist!`,
+        );
+    }
+    deleteByName(allSubs, name);
+    $.write(allSubs, SUBS_KEY);
+
+    const allCols = $.read(COLLECTIONS_KEY) || [];
+    for (const collection of allCols) {
+        collection.subscriptions = collection.subscriptions.filter(
+            (subscriptionName) => subscriptionName !== name,
+        );
+    }
+    $.write(allCols, COLLECTIONS_KEY);
+    return sub;
+}
+
+function shouldArchiveDeletion(mode) {
+    if (mode == null || mode === '' || mode === 'permanent') {
+        return false;
+    }
+    if (mode === 'archive') {
+        return true;
+    }
+    throw new RequestInvalidError(
+        'INVALID_DELETE_MODE',
+        `Unsupported delete mode: ${mode}`,
+    );
+}
+
+export { createSubscriptionItem, deleteSubscriptionItem };

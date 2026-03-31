@@ -19,10 +19,11 @@ import {
     ResourceNotFoundError,
 } from '@/restful/errors';
 import Gist from '@/utils/gist';
+import { archiveArtifact } from '@/utils/archive';
 
 export default function register($app) {
     // Initialization
-    if (!$.read(ARTIFACTS_KEY)) $.write([], ARTIFACTS_KEY);
+    if (!$.read(ARTIFACTS_KEY)) $.write({}, ARTIFACTS_KEY);
 
     // RESTful APIs
     $app.get('/api/artifacts/restore', restoreArtifacts);
@@ -41,9 +42,9 @@ export default function register($app) {
 async function restoreArtifacts(_, res) {
     $.info('开始恢复远程配置...');
     try {
-        const { gistToken, syncPlatform } = $.read(SETTINGS_KEY) || {};
+        const { gistToken, syncPlatform } = $.read(SETTINGS_KEY);
         if (!gistToken) {
-            throw new Error('未设置 GitHub Token！');
+            return Promise.reject('未设置 GitHub Token！');
         }
         const manager = new Gist({
             token: gistToken,
@@ -56,42 +57,31 @@ async function restoreArtifacts(_, res) {
             if (!gist?.files) {
                 throw new Error(`找不到 Sub-Store Gist 文件列表`);
             }
-            const allArtifacts = $.read(ARTIFACTS_KEY) || [];
-            const failedFiles = [];
-            // 兼容 GitLab (files 为数组 [{path, raw_url}]) 和 GitHub (files 为对象 {name: {filename, raw_url}})
-            let filesObj = gist.files;
-            let isGitLab = false;
-            if (Array.isArray(filesObj)) {
-                isGitLab = true;
-                filesObj = Object.fromEntries(
-                    filesObj.map((item) => [item.path, item]),
-                );
-            }
-            Object.keys(filesObj).map((key) => {
-                const file = filesObj[key];
-                const filename = isGitLab ? file?.path : file?.filename;
+            const allArtifacts = $.read(ARTIFACTS_KEY);
+            const failed = [];
+            Object.keys(gist.files).map((key) => {
+                const filename = gist.files[key]?.filename;
                 if (filename) {
                     if (encodeURIComponent(filename) !== filename) {
                         $.error(`文件名 ${filename} 未编码 不保存`);
-                        failedFiles.push(filename);
+                        failed.push(filename);
                     } else {
                         const artifact = findByName(allArtifacts, filename);
-                        const raw_url = file?.raw_url;
-                        const url = isGitLab
-                            ? raw_url
-                            : raw_url?.replace(
-                                  /\/raw\/[^/]*\/(.*)/,
-                                  '/raw/$1',
-                              );
                         if (artifact) {
                             updateByName(allArtifacts, filename, {
                                 ...artifact,
-                                url,
+                                url: gist.files[key]?.raw_url.replace(
+                                    /\/raw\/[^/]*\/(.*)/,
+                                    '/raw/$1',
+                                ),
                             });
                         } else {
                             allArtifacts.push({
                                 name: `${filename}`,
-                                url,
+                                url: gist.files[key]?.raw_url.replace(
+                                    /\/raw\/[^/]*\/(.*)/,
+                                    '/raw/$1',
+                                ),
                             });
                         }
                     }
@@ -117,20 +107,19 @@ async function restoreArtifacts(_, res) {
 }
 
 function getAllArtifacts(req, res) {
-    const allArtifacts = $.read(ARTIFACTS_KEY) || [];
+    const allArtifacts = $.read(ARTIFACTS_KEY);
     success(res, allArtifacts);
 }
 
 function replaceArtifact(req, res) {
     const allArtifacts = req.body;
-    if (!Array.isArray(allArtifacts)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
     $.write(allArtifacts, ARTIFACTS_KEY);
     success(res);
 }
 
 async function getArtifact(req, res) {
     let { name } = req.params;
-    const allArtifacts = $.read(ARTIFACTS_KEY) || [];
+    const allArtifacts = $.read(ARTIFACTS_KEY);
     const artifact = findByName(allArtifacts, name);
 
     if (artifact) {
@@ -148,38 +137,17 @@ async function getArtifact(req, res) {
 }
 
 function createArtifact(req, res) {
-    const artifact = req.body;
-    if (!validateArtifactName(artifact.name)) {
-        failed(
-            res,
-            new RequestInvalidError(
-                'INVALID_ARTIFACT_NAME',
-                `Artifact name ${artifact.name} is invalid.`,
-            ),
-        );
-        return;
-    }
-
-    $.info(`正在创建远程配置：${artifact.name}`);
-    const allArtifacts = $.read(ARTIFACTS_KEY) || [];
-    if (findByName(allArtifacts, artifact.name)) {
-        failed(
-            res,
-            new RequestInvalidError(
-                'DUPLICATE_KEY',
-                `Artifact ${artifact.name} already exists.`,
-            ),
-        );
-    } else {
-        insertByPosition(allArtifacts, artifact, getCreateItemPosition());
-        $.write(allArtifacts, ARTIFACTS_KEY);
+    try {
+        const artifact = createArtifactItem(req.body);
         success(res, artifact, 201);
+    } catch (error) {
+        failed(res, error);
     }
 }
 
 function updateArtifact(req, res) {
     let artifact = req.body;
-    const allArtifacts = $.read(ARTIFACTS_KEY) || [];
+    const allArtifacts = $.read(ARTIFACTS_KEY);
     let oldName = req.params.name;
     const oldArtifact = findByName(allArtifacts, oldName);
     if (oldArtifact) {
@@ -205,66 +173,112 @@ function updateArtifact(req, res) {
     } else {
         failed(
             res,
-            new ResourceNotFoundError(
-                'RESOURCE_NOT_FOUND',
-                `Artifact ${oldName} does not exist!`,
+            new RequestInvalidError(
+                'DUPLICATE_KEY',
+                `Artifact ${oldName} already exists.`,
             ),
-            404,
         );
     }
 }
 
 async function deleteArtifact(req, res) {
-    let { name } = req.params;
-    $.info(`正在删除远程配置：${name}`);
-    const allArtifacts = $.read(ARTIFACTS_KEY) || [];
     try {
-        const artifact = findByName(allArtifacts, name);
-        if (!artifact) throw new Error(`远程配置：${name}不存在！`);
-        if (artifact.updated) {
-            // delete gist
-            const files = {};
-            files[encodeURIComponent(artifact.name)] = {
-                content: '',
-            };
-            if (encodeURIComponent(artifact.name) !== artifact.name) {
-                files[artifact.name] = {
-                    content: '',
-                };
-            }
-
-            // 当别的Sub 删了同步订阅 或 gist里面删了 当前设备没有删除 时 无法删除的bug
-            try {
-                await syncToGist(files);
-            } catch (i) {
-                $.error(`Function syncToGist: ${name} : ${i}`);
-            }
+        let { name } = req.params;
+        $.info(`正在删除远程配置：${name}`);
+        if (shouldArchiveDeletion(req.query.mode)) {
+            archiveArtifact(name);
         }
-        // delete local cache
-        deleteByName(allArtifacts, name);
-        $.write(allArtifacts, ARTIFACTS_KEY);
+        await deleteArtifactItem(name);
         success(res);
     } catch (err) {
-        $.error(`无法删除远程配置：${name}，原因：${err}`);
+        $.error(`无法删除远程配置：${req.params.name}，原因：${err}`);
         failed(
             res,
-            new InternalServerError(
-                `FAILED_TO_DELETE_ARTIFACT`,
-                `Failed to delete artifact ${name}`,
-                `Reason: ${err}`,
-            ),
+            err instanceof InternalServerError ||
+                err instanceof RequestInvalidError ||
+                err instanceof ResourceNotFoundError
+                ? err
+                : new InternalServerError(
+                      `FAILED_TO_DELETE_ARTIFACT`,
+                      `Failed to delete artifact ${req.params.name}`,
+                      `Reason: ${err}`,
+                  ),
         );
     }
 }
 
 function validateArtifactName(name) {
-    return /^[a-zA-Z0-9._-]+$/.test(name);
+    return /^[a-zA-Z0-9._-]*$/.test(name);
+}
+
+function createArtifactItem(artifact) {
+    if (!validateArtifactName(artifact.name)) {
+        throw new RequestInvalidError(
+            'INVALID_ARTIFACT_NAME',
+            `Artifact name ${artifact.name} is invalid.`,
+        );
+    }
+
+    $.info(`正在创建远程配置：${artifact.name}`);
+    const allArtifacts = $.read(ARTIFACTS_KEY);
+    if (findByName(allArtifacts, artifact.name)) {
+        throw new RequestInvalidError(
+            'DUPLICATE_KEY',
+            `Artifact ${artifact.name} already exists.`,
+        );
+    }
+    insertByPosition(allArtifacts, artifact, getCreateItemPosition());
+    $.write(allArtifacts, ARTIFACTS_KEY);
+    return artifact;
+}
+
+async function deleteArtifactItem(name) {
+    const allArtifacts = $.read(ARTIFACTS_KEY);
+    const artifact = findByName(allArtifacts, name);
+    if (!artifact) {
+        throw new ResourceNotFoundError(
+            'RESOURCE_NOT_FOUND',
+            `Artifact ${name} does not exist!`,
+        );
+    }
+    if (artifact.updated) {
+        const files = {};
+        files[encodeURIComponent(artifact.name)] = {
+            content: '',
+        };
+        if (encodeURIComponent(artifact.name) !== artifact.name) {
+            files[artifact.name] = {
+                content: '',
+            };
+        }
+        try {
+            await syncToGist(files);
+        } catch (error) {
+            $.error(`Function syncToGist: ${name} : ${error}`);
+        }
+    }
+    deleteByName(allArtifacts, name);
+    $.write(allArtifacts, ARTIFACTS_KEY);
+    return artifact;
+}
+
+function shouldArchiveDeletion(mode) {
+    if (mode == null || mode === '' || mode === 'permanent') {
+        return false;
+    }
+    if (mode === 'archive') {
+        return true;
+    }
+    throw new RequestInvalidError(
+        'INVALID_DELETE_MODE',
+        `Unsupported delete mode: ${mode}`,
+    );
 }
 
 async function syncToGist(files) {
-    const { gistToken, syncPlatform } = $.read(SETTINGS_KEY) || {};
+    const { gistToken, syncPlatform } = $.read(SETTINGS_KEY);
     if (!gistToken) {
-        throw new Error('未设置 GitHub Token！');
+        return Promise.reject('未设置 GitHub Token！');
     }
     const manager = new Gist({
         token: gistToken,
@@ -279,7 +293,7 @@ async function syncToGist(files) {
     } catch (e) {}
 
     const url = body?.html_url ?? body?.web_url;
-    const settings = $.read(SETTINGS_KEY) || {};
+    const settings = $.read(SETTINGS_KEY);
     if (url) {
         $.log(`同步 Gist 后, 找到 Sub-Store Gist: ${url}`);
         settings.artifactStore = url;
@@ -293,3 +307,4 @@ async function syncToGist(files) {
 }
 
 export { syncToGist };
+export { createArtifactItem, deleteArtifactItem };

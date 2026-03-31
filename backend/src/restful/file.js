@@ -15,8 +15,8 @@ import {
     InternalServerError,
 } from '@/restful/errors';
 import { produceArtifact } from '@/restful/sync';
+import { archiveFile } from '@/utils/archive';
 import { formatDateTime } from '@/utils';
-import { parseBooleanStyleArgs } from '@/utils/parse';
 
 export default function register($app) {
     if (!$.read(FILES_KEY)) $.write([], FILES_KEY);
@@ -36,24 +36,12 @@ export default function register($app) {
 
 // file API
 function createFile(req, res) {
-    const file = req.body;
-    file.name = `${file.name ?? Date.now()}`;
-    $.info(`正在创建文件：${file.name}`);
-    const allFiles = $.read(FILES_KEY) || [];
-    if (findByName(allFiles, file.name)) {
-        return failed(
-            res,
-            new RequestInvalidError(
-                'DUPLICATE_KEY',
-                req.body.name
-                    ? `已存在 name 为 ${file.name} 的文件`
-                    : `无法同时创建相同的文件 可稍后重试`,
-            ),
-        );
+    try {
+        const file = createFileItem(req.body);
+        success(res, file, 201);
+    } catch (error) {
+        failed(res, error);
     }
-    insertByPosition(allFiles, file, getCreateItemPosition());
-    $.write(allFiles, FILES_KEY);
-    success(res, file, 201);
 }
 
 async function getFile(req, res, next) {
@@ -89,7 +77,15 @@ async function getFile(req, res, next) {
             // 支持 `#${encodeURIComponent(JSON.stringify({arg1: "1"}))}`
             options = JSON.parse(decodeURIComponent(req.query.$options));
         } catch (e) {
-            options = parseBooleanStyleArgs(req.query.$options);
+            for (const pair of req.query.$options.split('&')) {
+                const key = pair.split('=')[0];
+                const value = pair.split('=')[1];
+                // 部分兼容之前的逻辑 const value = pair.split('=')[1] || true;
+                options[key] =
+                    value == null || value === ''
+                        ? true
+                        : decodeURIComponent(value);
+            }
         }
         $.info(`传入 $options: ${JSON.stringify(options)}`);
         Object.assign($options, options);
@@ -125,7 +121,7 @@ async function getFile(req, res, next) {
         $.info(`指定生产类型: ${produceType}`);
     }
 
-    const allFiles = $.read(FILES_KEY) || [];
+    const allFiles = $.read(FILES_KEY);
     const file = findByName(allFiles, name);
     if (file) {
         try {
@@ -235,7 +231,7 @@ async function getFile(req, res, next) {
 function getWholeFile(req, res) {
     let { name } = req.params;
     let { raw } = req.query;
-    const allFiles = $.read(FILES_KEY) || [];
+    const allFiles = $.read(FILES_KEY);
     const file = findByName(allFiles, name);
     if (file) {
         if (raw) {
@@ -267,7 +263,7 @@ function getWholeFile(req, res) {
 function updateFile(req, res) {
     let { name } = req.params;
     let file = req.body;
-    const allFiles = $.read(FILES_KEY) || [];
+    const allFiles = $.read(FILES_KEY);
     const oldFile = findByName(allFiles, name);
     if (oldFile) {
         if (!file.name) file.name = oldFile.name;
@@ -307,16 +303,21 @@ function updateFile(req, res) {
 }
 
 function deleteFile(req, res) {
-    let { name } = req.params;
-    $.info(`正在删除文件：${name}`);
-    let allFiles = $.read(FILES_KEY) || [];
-    deleteByName(allFiles, name);
-    $.write(allFiles, FILES_KEY);
-    success(res);
+    try {
+        let { name } = req.params;
+        $.info(`正在删除文件：${name}`);
+        if (shouldArchiveDeletion(req.query.mode)) {
+            archiveFile(name);
+        }
+        deleteFileItem(name);
+        success(res);
+    } catch (error) {
+        failed(res, error);
+    }
 }
 
 function getAllFiles(req, res) {
-    const allFiles = $.read(FILES_KEY) || [];
+    const allFiles = $.read(FILES_KEY);
     success(
         res, // eslint-disable-next-line no-unused-vars
         allFiles.map(({ content, ...rest }) => rest),
@@ -324,13 +325,61 @@ function getAllFiles(req, res) {
 }
 
 function getAllWholeFiles(req, res) {
-    const allFiles = $.read(FILES_KEY) || [];
+    const allFiles = $.read(FILES_KEY);
     success(res, allFiles);
 }
 
 function replaceFile(req, res) {
     const allFiles = req.body;
-    if (!Array.isArray(allFiles)) return failed(res, new RequestInvalidError('INVALID_INPUT', 'Expected an array'));
     $.write(allFiles, FILES_KEY);
     success(res);
 }
+
+function createFileItem(rawFile) {
+    const file = {
+        ...rawFile,
+    };
+    file.name = `${file.name ?? Date.now()}`;
+    $.info(`正在创建文件：${file.name}`);
+    const allFiles = $.read(FILES_KEY);
+    if (findByName(allFiles, file.name)) {
+        throw new RequestInvalidError(
+            'DUPLICATE_KEY',
+            rawFile.name
+                ? `已存在 name 为 ${file.name} 的文件`
+                : `无法同时创建相同的文件 可稍后重试`,
+        );
+    }
+    insertByPosition(allFiles, file, getCreateItemPosition());
+    $.write(allFiles, FILES_KEY);
+    return file;
+}
+
+function deleteFileItem(name) {
+    const allFiles = $.read(FILES_KEY);
+    const file = findByName(allFiles, name);
+    if (!file) {
+        throw new ResourceNotFoundError(
+            'RESOURCE_NOT_FOUND',
+            `File ${name} does not exist!`,
+        );
+    }
+    deleteByName(allFiles, name);
+    $.write(allFiles, FILES_KEY);
+    return file;
+}
+
+function shouldArchiveDeletion(mode) {
+    if (mode == null || mode === '' || mode === 'permanent') {
+        return false;
+    }
+    if (mode === 'archive') {
+        return true;
+    }
+    throw new RequestInvalidError(
+        'INVALID_DELETE_MODE',
+        `Unsupported delete mode: ${mode}`,
+    );
+}
+
+export { createFileItem, deleteFileItem };
