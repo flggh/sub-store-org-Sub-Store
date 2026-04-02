@@ -30,6 +30,7 @@ import {
     safeDecodeURIComponent,
     parseBooleanStyleArgs,
 } from '@/utils/parse';
+import { hex_md5 } from '@/vendor/md5';
 
 function preprocess(raw) {
     for (const processor of PROXY_PREPROCESSORS) {
@@ -107,10 +108,8 @@ async function processFn(
     for (const item of operators) {
         if (item.disabled) {
             $.log(
-                `Skipping disabled operator: "${
-                    item.type
-                }" with arguments:\n >>> ${
-                    JSON.stringify(item.args, null, 2) || 'None'
+                `Skipping disabled operator: "${item.type
+                }" with arguments:\n >>> ${JSON.stringify(item.args, null, 2) || 'None'
                 }`,
             );
             continue;
@@ -132,14 +131,13 @@ async function processFn(
                         $arguments = parseBooleanStyleArgs(rawArgs[1]);
                     }
                 }
-                url = `${url.split('#')[0]}${
-                    rawArgs[2]
+                url = `${url.split('#')[0]}${rawArgs[2]
                         ? `#${rawArgs[2]}`
                         : $arguments?.noCache != null ||
-                          $arguments?.insecure != null
-                        ? `#${rawArgs[1]}`
-                        : ''
-                }`;
+                            $arguments?.insecure != null
+                            ? `#${rawArgs[1]}`
+                            : ''
+                    }`;
                 const downloadUrlMatch = url
                     .split('#')[0]
                     .match(/^\/api\/(file|module)\/(.+)/);
@@ -207,8 +205,7 @@ async function processFn(
         }
 
         $.log(
-            `Applying "${item.type}" with arguments:\n >>> ${
-                JSON.stringify(item.args, null, 2) || 'None'
+            `Applying "${item.type}" with arguments:\n >>> ${JSON.stringify(item.args, null, 2) || 'None'
             }`,
         );
         let processor;
@@ -347,6 +344,7 @@ export const ProxyUtils = {
     Buffer,
     Base64,
     JSON5,
+    hex_md5,
 };
 
 function tryParse(parser, line) {
