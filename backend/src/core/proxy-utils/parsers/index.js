@@ -300,7 +300,8 @@ function URI_SS() {
             ).split(';');
             const params = {};
             for (const item of pluginInfo) {
-                const [key, val] = splitKV(item);
+                let [key, val] = splitKV(item);
+                if (val) val = val.replace(/\\=/g, '=');
                 if (key) params[key] = val || true; // some options like "tls" will not have value
             }
             switch (params.plugin) {
@@ -321,6 +322,8 @@ function URI_SS() {
                             getIfNotBlank(params['host']),
                         path: getIfNotBlank(params.path),
                         tls: getIfPresent(params.tls),
+                        // mux 目前有问题 v2rayN 有 bug...开了 mux 导出时也是 0, 如果改成 1 导入它就报错
+                        // 有需求的自己用脚本操作吧
                     };
                     break;
                 case 'shadow-tls': {
