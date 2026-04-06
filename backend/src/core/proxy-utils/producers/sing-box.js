@@ -1,6 +1,7 @@
 import ClashMeta_Producer from './clashmeta';
 import $ from '@/core/app';
 import { isIPv4, isIPv6, isPlainObject } from '@/utils';
+import { normalizePluginMuxValue } from './utils';
 
 const ipVersions = {
     ipv4: 'ipv4_only',
@@ -277,11 +278,7 @@ const normalizePemLines = (value, label) => {
     if (lines.some((line) => /^-----BEGIN [A-Za-z0-9 -]+-----$/.test(line))) {
         return lines;
     }
-    return [
-        `-----BEGIN ${label}-----`,
-        ...lines,
-        `-----END ${label}-----`,
-    ];
+    return [`-----BEGIN ${label}-----`, ...lines, `-----END ${label}-----`];
 };
 
 const tlsParser = (proxy, parsedProxy) => {
@@ -583,11 +580,14 @@ const ssParser = (proxy = {}) => {
                     case 'headers':
                         optArr.push(`headers=${JSON.stringify(pluginOpts.headers)}`);
                         break;
-                    case 'mux':
-                        if (pluginOpts.mux)
-                            parsedProxy.multiplex = { enabled: true };
-                        optArr.push(`mux=${proxy['plugin-opts'].mux}`);
+                    case 'mux': {
+                        const mux = normalizePluginMuxValue(
+                            proxy['plugin-opts'].mux,
+                        );
+                        if (mux) parsedProxy.multiplex = { enabled: true };
+                        optArr.push(`mux=${mux}`);
                         break;
+                    }
                     default:
                         optArr.push(`${k}=${pluginOpts[k]}`);
                 }
