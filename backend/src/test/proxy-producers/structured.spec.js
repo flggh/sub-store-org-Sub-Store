@@ -572,7 +572,7 @@ describe('Proxy structured producers', function () {
         }
     });
 
-    it('keeps legacy single-line proxy output by default for Clash-style YAML producers', function () {
+    it('emits pretty YAML output by default for Clash-style YAML producers', function () {
         const proxy = {
             type: 'ss',
             name: 'Legacy YAML',
@@ -591,11 +591,11 @@ describe('Proxy structured producers', function () {
         ]) {
             const output = produceExternal(platform, proxy);
 
-            expect(output, platform).to.match(/\n {2}- \{/);
+            expect(output, platform).to.not.match(/\n {2}- \{/);
         }
     });
 
-    it('emits pretty yaml for Clash-style YAML producers when prettyYaml is enabled', function () {
+    it('emits single-line JSON proxy output for Clash-style YAML producers when prettyYaml is disabled', function () {
         const proxy = {
             type: 'ss',
             name: 'Real YAML',
@@ -613,13 +613,13 @@ describe('Proxy structured producers', function () {
             'Egern',
         ]) {
             const output = produceExternal(platform, proxy, {
-                prettyYaml: true,
+                prettyYaml: false,
             });
             const external = loadProducedYaml(platform, proxy, {
                 prettyYaml: true,
             });
 
-            expect(output, platform).to.not.match(/\n {2}- \{/);
+            expect(output, platform).to.match(/\n {2}- \{/);
             expect(external.proxies, platform).to.have.length(1);
 
             if (platform === 'Egern') {

@@ -44,20 +44,24 @@ export function normalizePluginMuxValue(mux) {
 export function produceProxyListOutput(list, type, opts = {}) {
     if (type === 'internal') return list;
 
-    if (
-        opts.prettyYaml ||
-        opts['pretty-yaml']
-    ) {
-        return YAML.safeDump(
-            {
-                proxies: list,
-            },
-            {
-                lineWidth: -1,
-            },
-        );
+    const prettyYaml = opts.prettyYaml ?? opts['pretty-yaml'];
+    // 仅当显式传入 false / "false" 时才使用 JSON 行格式
+    const useJson =
+        prettyYaml === false ||
+        prettyYaml === 'false' ||
+        prettyYaml === '0';
+
+    if (useJson) {
+        return 'proxies:\n' +
+            list.map((proxy) => '  - ' + JSON.stringify(proxy) + '\n').join('');
     }
 
-    return 'proxies:\n' +
-        list.map((proxy) => '  - ' + JSON.stringify(proxy) + '\n').join('');
+    return YAML.safeDump(
+        {
+            proxies: list,
+        },
+        {
+            lineWidth: -1,
+        },
+    );
 }
