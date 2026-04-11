@@ -99,7 +99,7 @@ export default async function download(
     if ($.env.isNode) {
         proxy = proxy || eval('process.env.SUB_STORE_BACKEND_DEFAULT_PROXY');
     }
-    const userAgent = ua || defaultUserAgent || 'clash.meta';
+    const userAgent = ua || defaultUserAgent || 'clash.meta/v1.19.23';
     let customHeaders;
     if ($arguments?.headers) {
         try {
@@ -301,7 +301,13 @@ export default async function download(
             if (headers) {
                 const flowInfo = getFlowField(headers);
                 if (flowInfo) {
-                    headersResourceCache.set(id, flowInfo);
+                    headersResourceCache.set(
+                        id,
+                        flowInfo,
+                        $arguments?.headersCacheTtl
+                            ? $arguments?.headersCacheTtl * 1000
+                            : undefined,
+                    );
                 }
             }
             if (body.replace(/\s/g, '').length === 0)
@@ -342,7 +348,14 @@ export default async function download(
                 }
             }
             if (shouldCache) {
-                resourceCache.set(id, body);
+                console.log($arguments);
+                resourceCache.set(
+                    id,
+                    body,
+                    $arguments?.cacheTtl
+                        ? $arguments?.cacheTtl * 1000
+                        : undefined,
+                );
                 if (customCacheKey) {
                     $.info(
                         `URL ${url}\n写入自定义缓存 ${$arguments?.cacheKey}`,
