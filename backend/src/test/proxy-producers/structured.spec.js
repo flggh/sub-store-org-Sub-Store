@@ -784,6 +784,47 @@ describe('Proxy structured producers', function () {
         });
     });
 
+    it('maps shadowsocks obfs plugin fields into Egern nested structures', function () {
+        const proxy = {
+            type: 'ss',
+            name: 'Egern SS Obfs TLS',
+            server: 'ss.example.com',
+            port: 8388,
+            cipher: 'aes-128-gcm',
+            password: 'secret',
+            plugin: 'obfs',
+            'plugin-opts': {
+                mode: 'tls',
+                host: 'legacy.example.com',
+                path: '/legacy',
+            },
+        };
+
+        const internal = produceInternal('Egern', proxy)[0];
+        const external = loadProducedYaml('Egern', proxy);
+
+        expectSubset(internal, {
+            shadowsocks: {
+                name: 'Egern SS Obfs TLS',
+                method: 'aes-128-gcm',
+                server: 'ss.example.com',
+                port: 8388,
+                password: 'secret',
+                obfs: 'tls',
+                obfs_host: 'legacy.example.com',
+                obfs_uri: '/legacy',
+            },
+        });
+        expectSubset(external.proxies[0], {
+            shadowsocks: {
+                name: 'Egern SS Obfs TLS',
+                obfs: 'tls',
+                obfs_host: 'legacy.example.com',
+                obfs_uri: '/legacy',
+            },
+        });
+    });
+
     it('preserves numeric v2ray-plugin mux values across Clash-family YAML producers', function () {
         const buildProxy = (name, mux) => ({
             type: 'ss',
@@ -900,6 +941,177 @@ describe('Proxy structured producers', function () {
         }
     });
 
+    it('emits WireGuard interface CIDR suffixes for Mihomo and Shadowrocket outputs', function () {
+        const proxies = [
+            {
+                type: 'wireguard',
+                name: 'WG Explicit CIDR',
+                server: 'wg-explicit.example.com',
+                port: 51820,
+                'private-key': 'private-key-1',
+                'public-key': 'public-key-1',
+                ip: '10.0.0.2',
+                ipv6: 'fd00::2',
+                'ip-cidr': 24,
+                'ipv6-cidr': 64,
+            },
+            {
+                type: 'wireguard',
+                name: 'WG Default CIDR',
+                server: 'wg-default.example.com',
+                port: 51820,
+                'private-key': 'private-key-2',
+                'public-key': 'public-key-2',
+                ip: '10.0.0.3',
+                ipv6: 'fd00::3',
+            },
+        ];
+
+        for (const platform of ['Mihomo', 'Shadowrocket']) {
+            const output = loadProducedYaml(platform, proxies);
+            const explicit = output.proxies.find(
+                (proxy) => proxy.name === 'WG Explicit CIDR',
+            );
+            const defaults = output.proxies.find(
+                (proxy) => proxy.name === 'WG Default CIDR',
+            );
+
+            expectSubset(explicit, {
+                ip: '10.0.0.2/24',
+                ipv6: 'fd00::2/64',
+            });
+            expectSubset(defaults, {
+                ip: '10.0.0.3/32',
+                ipv6: 'fd00::3/128',
+            });
+            expect(explicit).to.not.have.property('ip-cidr');
+            expect(explicit).to.not.have.property('ipv6-cidr');
+            expect(defaults).to.not.have.property('ip-cidr');
+            expect(defaults).to.not.have.property('ipv6-cidr');
+        }
+    });
+
+    it('emits WireGuard address CIDR suffixes for sing-box exports', function () {
+        const output = loadProducedJson('sing-box', [
+            {
+                type: 'wireguard',
+                name: 'Sing-box WG Explicit CIDR',
+                server: 'wg-explicit.example.com',
+                port: 51820,
+                'private-key': 'private-key-1',
+                'public-key': 'public-key-1',
+                ip: '10.0.0.2',
+                ipv6: 'fd00::2',
+                'ip-cidr': 24,
+                'ipv6-cidr': 64,
+            },
+            {
+                type: 'wireguard',
+                name: 'Sing-box WG Default CIDR',
+                server: 'wg-default.example.com',
+                port: 51820,
+                'private-key': 'private-key-2',
+                'public-key': 'public-key-2',
+                ip: '10.0.0.3',
+                ipv6: 'fd00::3',
+            },
+        ]);
+
+        const explicit = output.endpoints.find(
+            (endpoint) => endpoint.tag === 'Sing-box WG Explicit CIDR',
+        );
+        const defaults = output.endpoints.find(
+            (endpoint) => endpoint.tag === 'Sing-box WG Default CIDR',
+        );
+
+        expectSubset(explicit, {
+            type: 'wireguard',
+            address: ['10.0.0.2/24', 'fd00::2/64'],
+        });
+        expectSubset(defaults, {
+            type: 'wireguard',
+            address: ['10.0.0.3/32', 'fd00::3/128'],
+        });
+    });
+
+    it('emits WireGuard interface CIDR suffixes for Egern exports', function () {
+        const proxies = [
+            {
+                type: 'wireguard',
+                name: 'Egern WG Explicit CIDR',
+                server: 'wg-explicit.example.com',
+                port: 51820,
+                'private-key': 'private-key-1',
+                'public-key': 'public-key-1',
+                ip: '10.0.0.2',
+                ipv6: 'fd00::2',
+                'ip-cidr': 24,
+                'ipv6-cidr': 64,
+            },
+            {
+                type: 'wireguard',
+                name: 'Egern WG Default CIDR',
+                server: 'wg-default.example.com',
+                port: 51820,
+                'private-key': 'private-key-2',
+                'public-key': 'public-key-2',
+                ip: '10.0.0.3',
+                ipv6: 'fd00::3',
+            },
+        ];
+
+        const internal = produceInternal('Egern', proxies);
+        const external = loadProducedYaml('Egern', proxies);
+
+        const explicitInternal = internal.find(
+            (proxy) => proxy.wireguard?.name === 'Egern WG Explicit CIDR',
+        );
+        const defaultsInternal = internal.find(
+            (proxy) => proxy.wireguard?.name === 'Egern WG Default CIDR',
+        );
+        const explicitExternal = external.proxies.find(
+            (proxy) => proxy.wireguard?.name === 'Egern WG Explicit CIDR',
+        );
+        const defaultsExternal = external.proxies.find(
+            (proxy) => proxy.wireguard?.name === 'Egern WG Default CIDR',
+        );
+
+        for (const proxy of [
+            explicitInternal,
+            defaultsInternal,
+            explicitExternal,
+            defaultsExternal,
+        ]) {
+            expect(proxy.wireguard).to.not.have.property('ip-cidr');
+            expect(proxy.wireguard).to.not.have.property('ipv6-cidr');
+        }
+
+        expectSubset(explicitInternal, {
+            wireguard: {
+                local_ipv4: '10.0.0.2/24',
+                local_ipv6: 'fd00::2/64',
+            },
+        });
+        expectSubset(defaultsInternal, {
+            wireguard: {
+                local_ipv4: '10.0.0.3/32',
+                local_ipv6: 'fd00::3/128',
+            },
+        });
+        expectSubset(explicitExternal, {
+            wireguard: {
+                local_ipv4: '10.0.0.2/24',
+                local_ipv6: 'fd00::2/64',
+            },
+        });
+        expectSubset(defaultsExternal, {
+            wireguard: {
+                local_ipv4: '10.0.0.3/32',
+                local_ipv6: 'fd00::3/128',
+            },
+        });
+    });
+
     it('filters canonical shadowsocks over-tls nodes for unsupported client targets by default', function () {
         const proxy = {
             type: 'ss',
@@ -1009,6 +1221,51 @@ describe('Proxy structured producers', function () {
                 port: 443,
                 uuid: UUID,
                 encryption: 'aes-128-gcm',
+            },
+            {
+                type: 'ss',
+                name: 'Healthy SS',
+                server: 'ss.example.com',
+                port: 8388,
+                cipher: 'aes-128-gcm',
+                password: 'secret',
+            },
+        ];
+
+        const internal = produceInternal('Egern', proxies);
+        const external = loadProducedYaml('Egern', proxies);
+
+        expect(internal).to.have.length(1);
+        expect(external.proxies).to.have.length(1);
+        expectSubset(internal[0], {
+            shadowsocks: {
+                name: 'Healthy SS',
+                method: 'aes-128-gcm',
+            },
+        });
+        expectSubset(external.proxies[0], {
+            shadowsocks: {
+                name: 'Healthy SS',
+            },
+        });
+    });
+
+    it('skips Egern shadowsocks proxies with unsupported plugins and keeps the rest of the subscription', function () {
+        const proxies = [
+            {
+                type: 'ss',
+                name: 'Invalid SS Plugin',
+                server: 'invalid.example.com',
+                port: 8388,
+                cipher: 'aes-128-gcm',
+                password: 'secret',
+                plugin: 'v2ray-plugin',
+                'plugin-opts': {
+                    mode: 'websocket',
+                    host: 'cdn.example.com',
+                    path: '/socket',
+                    tls: true,
+                },
             },
             {
                 type: 'ss',
