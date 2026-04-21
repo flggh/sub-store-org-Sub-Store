@@ -5,6 +5,12 @@ import { success, failed } from './response';
 import download from '@/utils/download';
 import { SUBS_KEY } from '@/constants';
 import $ from '@/core/app';
+import {
+    handleIgnoreFailedRemoteSubError,
+    notifyIgnoreFailedRemoteSubFallback,
+    resolveIgnoreFailedRemoteSubMode,
+    shouldFallbackIgnoreFailedRemoteSub,
+} from '@/restful/ignore-failed-remote-sub';
 import { normalizeClashYaml } from '@/core/proxy-utils/preprocessors';
 
 export default function register($app) {
@@ -106,8 +112,10 @@ async function previewFile(req, res) {
 }
 
 async function compareSub(req, res) {
+    const sub = req.body;
+    const mode = resolveIgnoreFailedRemoteSubMode(sub.ignoreFailedRemoteSub);
+
     try {
-        const sub = req.body;
         const target = req.query.target || 'JSON';
         let content;
         if (
@@ -145,21 +153,20 @@ async function compareSub(req, res) {
             );
 
             if (Object.keys(errors).length > 0) {
-                if (!sub.ignoreFailedRemoteSub) {
-                    throw new Error(
-                        `订阅 ${sub.name} 的远程订阅 ${Object.keys(errors).join(
-                            ', ',
-                        )} 发生错误, 请查看日志`,
-                    );
-                } else if (sub.ignoreFailedRemoteSub === 'enabled') {
-                    $.notify(
-                        `🌍 Sub-Store 预览订阅失败`,
-                        `❌ ${sub.name}`,
-                        `远程订阅 ${Object.keys(errors).join(
-                            ', ',
-                        )} 发生错误, 请查看日志`,
-                    );
-                }
+                const message = `订阅 ${sub.name} 的远程订阅 ${Object.keys(
+                    errors,
+                ).join(', ')} 发生错误, 请查看日志`;
+                handleIgnoreFailedRemoteSubError({
+                    mode,
+                    message,
+                    notify: () => {
+                        $.notify(
+                            `🌍 Sub-Store 预览订阅失败`,
+                            `❌ ${sub.name}`,
+                            message,
+                        );
+                    },
+                });
             }
             if (sub.mergeSources === 'localFirst') {
                 content.unshift(sub.content);
@@ -190,6 +197,27 @@ async function compareSub(req, res) {
         // produce
         success(res, { original, processed });
     } catch (err) {
+        if (shouldFallbackIgnoreFailedRemoteSub(mode)) {
+            notifyIgnoreFailedRemoteSubFallback({
+                mode,
+                error: err,
+                notify: (error) => {
+                    $.notify(
+                        `🌍 Sub-Store 预览订阅失败`,
+                        `❌ ${sub.name}`,
+                        `🤔 原因：${error.message ?? error}`,
+                    );
+                },
+            });
+            $.error(
+                `订阅 ${sub.name} 预览启用兜底后返回空结果: ${
+                    err.message ?? err
+                }`,
+            );
+            success(res, { original: [], processed: [] });
+            return;
+        }
+
         $.error(err.message ?? err);
         failed(
             res,
@@ -203,9 +231,13 @@ async function compareSub(req, res) {
 }
 
 async function compareCollection(req, res) {
+    const collection = req.body;
+    const collectionMode = resolveIgnoreFailedRemoteSubMode(
+        collection.ignoreFailedRemoteSub,
+    );
+
     try {
         const allSubs = $.read(SUBS_KEY) || [];
-        const collection = req.body;
         const subnames = Array.isArray(collection.subscriptions)
             ? [...collection.subscriptions]
             : [];
@@ -231,6 +263,9 @@ async function compareCollection(req, res) {
                     errors[name] = new Error(`找不到订阅 ${name}`);
                     return;
                 }
+                const subMode = resolveIgnoreFailedRemoteSubMode(
+                    sub.ignoreFailedRemoteSub,
+                );
                 try {
                     let raw;
                     if (
@@ -270,23 +305,20 @@ async function compareCollection(req, res) {
                         );
 
                         if (Object.keys(errors).length > 0) {
-                            if (!sub.ignoreFailedRemoteSub) {
-                                throw new Error(
-                                    `订阅 ${sub.name} 的远程订阅 ${Object.keys(
-                                        errors,
-                                    ).join(', ')} 发生错误, 请查看日志`,
-                                );
-                            } else if (
-                                sub.ignoreFailedRemoteSub === 'enabled'
-                            ) {
-                                $.notify(
-                                    `🌍 Sub-Store 预览订阅失败`,
-                                    `❌ ${sub.name}`,
-                                    `远程订阅 ${Object.keys(errors).join(
-                                        ', ',
-                                    )} 发生错误, 请查看日志`,
-                                );
-                            }
+                            const message = `订阅 ${sub.name} 的远程订阅 ${Object.keys(
+                                errors,
+                            ).join(', ')} 发生错误, 请查看日志`;
+                            handleIgnoreFailedRemoteSubError({
+                                mode: subMode,
+                                message,
+                                notify: () => {
+                                    $.notify(
+                                        `🌍 Sub-Store 预览订阅失败`,
+                                        `❌ ${sub.name}`,
+                                        message,
+                                    );
+                                },
+                            });
                         }
                         if (sub.mergeSources === 'localFirst') {
                             raw.unshift(sub.content);
@@ -315,6 +347,27 @@ async function compareCollection(req, res) {
                     );
                     results[name] = currentProxies;
                 } catch (err) {
+                    if (shouldFallbackIgnoreFailedRemoteSub(subMode)) {
+                        notifyIgnoreFailedRemoteSubFallback({
+                            mode: subMode,
+                            error: err,
+                            notify: (error) => {
+                                $.notify(
+                                    `🌍 Sub-Store 预览订阅失败`,
+                                    `❌ ${sub.name}`,
+                                    `🤔 原因：${error.message ?? error}`,
+                                );
+                            },
+                        });
+                        $.error(
+                            `订阅 ${sub.name} 在组合订阅预览中启用兜底后返回空结果: ${
+                                err.message ?? err
+                            }`,
+                        );
+                        results[name] = [];
+                        return;
+                    }
+
                     errors[name] = err;
 
                     $.error(
@@ -325,21 +378,20 @@ async function compareCollection(req, res) {
         );
 
         if (Object.keys(errors).length > 0) {
-            if (!collection.ignoreFailedRemoteSub) {
-                throw new Error(
-                    `组合订阅 ${collection.name} 的子订阅 ${Object.keys(
-                        errors,
-                    ).join(', ')} 发生错误, 请查看日志`,
-                );
-            } else if (collection.ignoreFailedRemoteSub === 'enabled') {
-                $.notify(
-                    `🌍 Sub-Store 预览组合订阅失败`,
-                    `❌ ${collection.name}`,
-                    `子订阅 ${Object.keys(errors).join(
-                        ', ',
-                    )} 发生错误, 请查看日志`,
-                );
-            }
+            const message = `组合订阅 ${collection.name} 的子订阅 ${Object.keys(
+                errors,
+            ).join(', ')} 发生错误, 请查看日志`;
+            handleIgnoreFailedRemoteSubError({
+                mode: collectionMode,
+                message,
+                notify: () => {
+                    $.notify(
+                        `🌍 Sub-Store 预览组合订阅失败`,
+                        `❌ ${collection.name}`,
+                        message,
+                    );
+                },
+            });
         }
         // merge proxies with the original order
         const original = Array.prototype.concat.apply(
@@ -362,6 +414,27 @@ async function compareCollection(req, res) {
 
         success(res, { original, processed });
     } catch (err) {
+        if (shouldFallbackIgnoreFailedRemoteSub(collectionMode)) {
+            notifyIgnoreFailedRemoteSubFallback({
+                mode: collectionMode,
+                error: err,
+                notify: (error) => {
+                    $.notify(
+                        `🌍 Sub-Store 预览组合订阅失败`,
+                        `❌ ${collection.name}`,
+                        `🤔 原因：${error.message ?? error}`,
+                    );
+                },
+            });
+            $.error(
+                `组合订阅 ${collection.name} 预览启用兜底后返回空结果: ${
+                    err.message ?? err
+                }`,
+            );
+            success(res, { original: [], processed: [] });
+            return;
+        }
+
         $.error(err.message ?? err);
         failed(
             res,
