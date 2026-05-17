@@ -949,7 +949,6 @@ const anytlsParser = (proxy = {}) => {
             `${proxy['min-idle-session']}`,
             10,
         );
-    networkParser(proxy, parsedProxy);
     tfoParser(proxy, parsedProxy);
     detourParser(proxy, parsedProxy);
     tlsParser(proxy, parsedProxy);
