@@ -104,10 +104,12 @@ describe('VMess and VLESS parser coverage', function () {
                 'client-fingerprint': 'chrome',
                 network: 'ws',
                 'ws-opts': {
-                    path: '/fragment?ed=2560',
+                    path: '/fragment',
                     headers: {
                         Host: 'fragment.example.com',
                     },
+                    'max-early-data': 2560,
+                    'early-data-header-name': 'Sec-WebSocket-Protocol',
                 },
             });
         });
@@ -273,9 +275,85 @@ describe('VMess and VLESS parser coverage', function () {
                         Host: 'upgrade.example.com',
                     },
                     'v2ray-http-upgrade': true,
-                    'v2ray-http-upgrade-fast-open': true,
                 },
             });
+            expect(proxy['ws-opts']).to.not.have.property(
+                'v2ray-http-upgrade-fast-open',
+            );
+        });
+
+        it('parses V2rayN httpupgrade path early data from multiple query params', function () {
+            const share = Base64.encode(
+                JSON.stringify({
+                    ps: 'VMess Upgrade Early',
+                    add: 'vmess-upgrade.example.com',
+                    port: '443',
+                    id: UUID,
+                    aid: '0',
+                    scy: 'auto',
+                    net: 'httpupgrade',
+                    host: 'upgrade.example.com',
+                    path: '/upgrade?a=1&ed=1024&b=2',
+                }),
+            );
+            const proxy = parseOne(`vmess://${share}`);
+
+            expectSubset(proxy, {
+                type: 'vmess',
+                name: 'VMess Upgrade Early',
+                server: 'vmess-upgrade.example.com',
+                port: 443,
+                network: 'ws',
+                'ws-opts': {
+                    path: '/upgrade?a=1&b=2',
+                    headers: {
+                        Host: 'upgrade.example.com',
+                    },
+                    'v2ray-http-upgrade': true,
+                    'v2ray-http-upgrade-fast-open': true,
+                    '_v2ray-http-upgrade-ed': '1024',
+                },
+            });
+            expect(proxy['ws-opts']).to.not.have.property('max-early-data');
+            expect(proxy['ws-opts']).to.not.have.property(
+                'early-data-header-name',
+            );
+        });
+
+        it('parses V2rayN httpupgrade top-level early data', function () {
+            const share = Base64.encode(
+                JSON.stringify({
+                    ps: 'VMess Upgrade Top Early',
+                    add: 'vmess-upgrade.example.com',
+                    port: '443',
+                    id: UUID,
+                    aid: '0',
+                    scy: 'auto',
+                    net: 'httpupgrade',
+                    host: 'upgrade.example.com',
+                    path: '/upgrade',
+                    ed: '1024',
+                }),
+            );
+            const proxy = parseOne(`vmess://${share}`);
+
+            expectSubset(proxy, {
+                type: 'vmess',
+                name: 'VMess Upgrade Top Early',
+                server: 'vmess-upgrade.example.com',
+                port: 443,
+                network: 'ws',
+                'ws-opts': {
+                    path: '/upgrade',
+                    headers: {
+                        Host: 'upgrade.example.com',
+                    },
+                    'v2ray-http-upgrade': true,
+                    'v2ray-http-upgrade-fast-open': true,
+                    '_v2ray-http-upgrade-ed': '1024',
+                },
+            });
+            expect(proxy['ws-opts']).to.not.have.property('max-early-data');
         });
 
         it('parses Shadowrocket VMess shares', function () {
@@ -417,6 +495,44 @@ describe('VMess and VLESS parser coverage', function () {
             });
         });
 
+        it('parses VLESS share ECH config into mihomo ech opts', function () {
+            const proxy = parseOne(
+                `vless://${UUID}@vless-ws.example.com:443?type=ws&security=tls&host=cdn.example.com&path=%2Fws&ech=${encodeURIComponent(
+                    'ECHCONFIG',
+                )}#VLESS%20WS%20ECH`,
+            );
+
+            expectSubset(proxy, {
+                type: 'vless',
+                name: 'VLESS WS ECH',
+                _echConfigList: 'ECHCONFIG',
+                'ech-opts': {
+                    enable: true,
+                    config: 'ECHCONFIG',
+                },
+            });
+        });
+
+        it('parses VLESS share ECH DNS into mihomo sidecar fields', function () {
+            const echConfigList = 'ech.example.com+https://1.1.1.1/dns-query';
+            const proxy = parseOne(
+                `vless://${UUID}@vless-ws.example.com:443?type=ws&security=tls&host=cdn.example.com&path=%2Fws&ech=${encodeURIComponent(
+                    echConfigList,
+                )}#VLESS%20WS%20ECH%20DNS`,
+            );
+
+            expectSubset(proxy, {
+                type: 'vless',
+                name: 'VLESS WS ECH DNS',
+                _echConfigList: echConfigList,
+                'ech-opts': {
+                    enable: true,
+                    _dns: 'https://1.1.1.1/dns-query',
+                    'query-server-name': 'ech.example.com',
+                },
+            });
+        });
+
         it('rejects websocket VLESS shares with malformed early data size', function () {
             expect(
                 parseAll(
@@ -550,9 +666,11 @@ describe('VMess and VLESS parser coverage', function () {
                         Host: 'upgrade.example.com',
                     },
                     'v2ray-http-upgrade': true,
-                    'v2ray-http-upgrade-fast-open': true,
                 },
             });
+            expect(proxy['ws-opts']).to.not.have.property(
+                'v2ray-http-upgrade-fast-open',
+            );
         });
 
         it('parses httpupgrade VLESS shares with early data metadata', function () {
@@ -573,8 +691,81 @@ describe('VMess and VLESS parser coverage', function () {
                     },
                     'v2ray-http-upgrade': true,
                     'v2ray-http-upgrade-fast-open': true,
-                    'max-early-data': 1024,
+                    '_v2ray-http-upgrade-ed': '1024',
                     'early-data-header-name': 'X-Upgrade',
+                },
+            });
+            expect(proxy['ws-opts']).to.not.have.property('max-early-data');
+        });
+
+        it('parses httpupgrade VLESS path early data from multiple query params', function () {
+            const proxy = parseOne(
+                `vless://${UUID}@vless-upgrade.example.com:443?type=httpupgrade&host=upgrade.example.com&path=%2Fupgrade%3Fa%3D1%26ed%3D1024%26b%3D2#VLESS%20Upgrade%20Path%20Early`,
+            );
+
+            expectSubset(proxy, {
+                type: 'vless',
+                name: 'VLESS Upgrade Path Early',
+                server: 'vless-upgrade.example.com',
+                port: 443,
+                network: 'ws',
+                'ws-opts': {
+                    path: '/upgrade?a=1&b=2',
+                    headers: {
+                        Host: 'upgrade.example.com',
+                    },
+                    'v2ray-http-upgrade': true,
+                    'v2ray-http-upgrade-fast-open': true,
+                    '_v2ray-http-upgrade-ed': '1024',
+                },
+            });
+            expect(proxy['ws-opts']).to.not.have.property('max-early-data');
+            expect(proxy['ws-opts']).to.not.have.property(
+                'early-data-header-name',
+            );
+        });
+
+        it('prefers VLESS path early data over duplicate top-level early data', function () {
+            const proxy = parseOne(
+                `vless://${UUID}@vless-upgrade.example.com:443?type=httpupgrade&host=upgrade.example.com&path=%2Fupgrade%3Fed%3D1024&ed=2048#VLESS%20Upgrade%20Duplicate%20Early`,
+            );
+
+            expectSubset(proxy, {
+                type: 'vless',
+                name: 'VLESS Upgrade Duplicate Early',
+                server: 'vless-upgrade.example.com',
+                port: 443,
+                network: 'ws',
+                'ws-opts': {
+                    path: '/upgrade',
+                    headers: {
+                        Host: 'upgrade.example.com',
+                    },
+                    'v2ray-http-upgrade': true,
+                    'v2ray-http-upgrade-fast-open': true,
+                    '_v2ray-http-upgrade-ed': '1024',
+                },
+            });
+        });
+
+        it('parses websocket VLESS path early data from multiple query params', function () {
+            const proxy = parseOne(
+                `vless://${UUID}@vless-ws.example.com:443?type=ws&security=tls&host=cdn.example.com&path=%2Fws%3Fa%3D1%26ed%3D2048%26b%3D2#VLESS%20WS%20Path%20Early`,
+            );
+
+            expectSubset(proxy, {
+                type: 'vless',
+                name: 'VLESS WS Path Early',
+                server: 'vless-ws.example.com',
+                port: 443,
+                network: 'ws',
+                'ws-opts': {
+                    path: '/ws?a=1&b=2',
+                    headers: {
+                        Host: 'cdn.example.com',
+                    },
+                    'max-early-data': 2048,
+                    'early-data-header-name': 'Sec-WebSocket-Protocol',
                 },
             });
         });
@@ -657,9 +848,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
                     'sc-max-each-post-bytes': 1000000,
@@ -675,6 +864,32 @@ describe('VMess and VLESS parser coverage', function () {
             });
             expect(proxy).to.not.have.property('_extra');
             expect(proxy).to.not.have.property('_extra_unsupported');
+        });
+
+        it('moves xhttp Host from obfsParam to xhttp-opts.host', function () {
+            const obfsParam = JSON.stringify({
+                Host: 'header.example.com',
+                'X-Test': 'demo',
+            });
+            const proxy = parseOne(
+                `vless://${UUID}@vless-xhttp.example.com:443?type=xhttp&security=tls&obfsParam=${encodeURIComponent(
+                    obfsParam,
+                )}&path=%2Fxhttp#VLESS%20XHTTP%20Host%20Header`,
+            );
+
+            expectSubset(proxy, {
+                network: 'xhttp',
+                'xhttp-opts': {
+                    host: 'header.example.com',
+                    path: '/xhttp',
+                    headers: {
+                        'X-Test': 'demo',
+                    },
+                },
+            });
+            expect(proxy['xhttp-opts']).to.not.have.nested.property(
+                'headers.Host',
+            );
         });
 
         it('parses xhttp VLESS shares with downloadSettings extra', function () {
@@ -721,9 +936,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'download-settings': {
                         server: 'download.example.com',
                         port: 8443,
@@ -777,9 +990,7 @@ describe('VMess and VLESS parser coverage', function () {
                 network: 'xhttp',
                 'xhttp-opts': {
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'download-settings': {
                         server: 'download.example.com',
                         port: 8443,
@@ -817,9 +1028,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'download-settings': {
                         network: 'xhttp',
                     },
@@ -860,9 +1069,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'download-settings': {
                         network: 'xhttp',
                     },
@@ -906,9 +1113,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'download-settings': {
                         network: 'xhttp',
                         server: 'download.example.com',
@@ -943,9 +1148,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                 },
             });
             expect(proxy).to.not.have.property('_extra_unsupported');
@@ -981,9 +1184,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
                     'sc-min-posts-interval-ms': '100-300',
@@ -1028,9 +1229,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
                     'sc-min-posts-interval-ms': 300,
@@ -1075,9 +1274,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
                     'sc-min-posts-interval-ms': '0-300',
@@ -1127,9 +1324,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
                     'sc-max-each-post-bytes': 1000000,
@@ -1182,9 +1377,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
                     'sc-max-each-post-bytes': 1000000,
@@ -1244,9 +1437,7 @@ describe('VMess and VLESS parser coverage', function () {
                     'xhttp-opts': {
                         mode: 'stream-up',
                         path: '/xhttp',
-                        headers: {
-                            Host: 'cdn.example.com',
-                        },
+                        host: 'cdn.example.com',
                         'no-grpc-header': true,
                         'x-padding-bytes': '64-128',
                         'reuse-settings': {
@@ -1301,9 +1492,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'download-settings': {
                         server: 'download.example.com',
                         port: 8443,
@@ -1414,8 +1603,8 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
+                    host: 'cdn.example.com',
                     headers: {
-                        Host: 'cdn.example.com',
                         'X-Test': 'demo',
                     },
                     'no-grpc-header': true,
@@ -1492,6 +1681,55 @@ describe('VMess and VLESS parser coverage', function () {
             ).to.not.have.property('sockopt');
         });
 
+        it('parses nested xhttp download TLS ECH DNS fields into mihomo sidecar fields', function () {
+            const extra = JSON.stringify({
+                downloadSettings: {
+                    address: 'download.example.com',
+                    port: 8443,
+                    security: 'tls',
+                    tlsSettings: {
+                        echConfigList:
+                            'download-ech.example.com+https://1.1.1.1/dns-query',
+                        echForceQuery: 'half',
+                        echSockopt: {
+                            mark: 255,
+                        },
+                    },
+                    xhttpSettings: {
+                        path: '/download',
+                    },
+                },
+            });
+            const proxy = parseOne(
+                `vless://${UUID}@vless-xhttp.example.com:443?type=xhttp&security=tls&host=cdn.example.com&path=%2Fxhttp&mode=stream-up&extra=${encodeURIComponent(
+                    extra,
+                )}#VLESS%20XHTTP%20Nested%20ECH%20DNS`,
+            );
+
+            expectSubset(proxy, {
+                type: 'vless',
+                network: 'xhttp',
+                'xhttp-opts': {
+                    'download-settings': {
+                        server: 'download.example.com',
+                        port: 8443,
+                        tls: true,
+                        'ech-opts': {
+                            enable: true,
+                            _dns: 'https://1.1.1.1/dns-query',
+                            'query-server-name': 'download-ech.example.com',
+                            '_force-query': 'half',
+                            _sockopt: {
+                                mark: 255,
+                            },
+                        },
+                        path: '/download',
+                    },
+                },
+            });
+            expect(proxy).to.not.have.property('_extra_unsupported');
+        });
+
         it('parses xhttp VLESS xmux ranges canonically and keeps unsupported keep-alive values in _extra_unsupported', function () {
             const extra = JSON.stringify({
                 xmux: {
@@ -1512,18 +1750,16 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'reuse-settings': {
                         'max-connections': '8',
                         'max-concurrency': '8-16',
                     },
                 },
             });
-            expect(proxy['xhttp-opts']?.['reuse-settings']).to.not.have.property(
-                'h-keep-alive-period',
-            );
+            expect(
+                proxy['xhttp-opts']?.['reuse-settings'],
+            ).to.not.have.property('h-keep-alive-period');
             expect(proxy._extra_unsupported).to.deep.equal({
                 xmux: {
                     hKeepAlivePeriod: '9007199254740993',
@@ -1554,9 +1790,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'download-settings': {
                         server: 'download.example.com',
                         port: 8443,
@@ -1593,9 +1827,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'download-settings': {
                         server: 'download.example.com',
                         port: 8443,
@@ -1646,9 +1878,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'download-settings': {
                         server: 'download.example.com',
                         port: 8443,
@@ -1699,9 +1929,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
                     'sc-max-each-post-bytes': 1000000,
@@ -1746,9 +1974,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
                     'sc-max-each-post-bytes': 1000000,
@@ -1793,9 +2019,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'xhttp-opts': {
                     mode: 'stream-up',
                     path: '/xhttp',
-                    headers: {
-                        Host: 'cdn.example.com',
-                    },
+                    host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
                     'sc-max-each-post-bytes': 1000000,
@@ -1851,9 +2075,7 @@ describe('VMess and VLESS parser coverage', function () {
                     'xhttp-opts': {
                         mode: 'stream-up',
                         path: '/xhttp',
-                        headers: {
-                            Host: 'cdn.example.com',
-                        },
+                        host: 'cdn.example.com',
                         'no-grpc-header': true,
                         'x-padding-bytes': '64-128',
                         'reuse-settings': {
@@ -2637,7 +2859,7 @@ describe('Platform raw-format parser coverage', function () {
             },
             {
                 title: 'parses trust-tunnel lines',
-                input: 'Surge TrustTunnel = trust-tunnel,surge-trust.example.com,443,username=user,password=secret,sni=sni.example.com,skip-cert-verify=true,reuse=true',
+                input: 'Surge TrustTunnel = trust-tunnel,surge-trust.example.com,443,username=user,password=secret,headers=X-Client:Surge;X-Token:abc,sni=sni.example.com,skip-cert-verify=true,reuse=true',
                 expected: {
                     type: 'trusttunnel',
                     name: 'Surge TrustTunnel',
@@ -2646,9 +2868,113 @@ describe('Platform raw-format parser coverage', function () {
                     username: 'user',
                     password: 'secret',
                     tls: true,
+                    headers: {
+                        'X-Client': 'Surge',
+                        'X-Token': 'abc',
+                    },
                     sni: 'sni.example.com',
                     'skip-cert-verify': true,
                     reuse: true,
+                },
+            },
+            {
+                title: 'parses h2-connect lines with dynamic headers',
+                input: 'Surge H2 = h2-connect,h2.example.com,443,headers=X-Padding:<random-string(16-32)>,sni=sni.example.com,skip-cert-verify=true',
+                expected: {
+                    type: 'h2-connect',
+                    name: 'Surge H2',
+                    server: 'h2.example.com',
+                    port: 443,
+                    tls: true,
+                    headers: {
+                        'X-Padding': '<random-string(16-32)>',
+                    },
+                    sni: 'sni.example.com',
+                    'skip-cert-verify': true,
+                },
+            },
+            {
+                title: 'keeps quoted Surge headers with semicolons inside User-Agent values',
+                input: '1=http,163.177.17.6,443,headers="Host:153.3.236.22:443;X-T5-Auth:683556433;Connection:Keep-Alive;User-Agent:okhttp/3.11.0 Dalvik/2.1.0 (Linux; U; Android 11; Redmi K30 5G Build/RKQ1.200826.002) baiduboxapp/11.0.5.12 (Baidu; P1 11)"',
+                expected: {
+                    type: 'http',
+                    name: '1',
+                    server: '163.177.17.6',
+                    port: 443,
+                    headers: {
+                        Host: '153.3.236.22:443',
+                        'X-T5-Auth': '683556433',
+                        Connection: 'Keep-Alive',
+                        'User-Agent':
+                            'okhttp/3.11.0 Dalvik/2.1.0 (Linux; U; Android 11; Redmi K30 5G Build/RKQ1.200826.002) baiduboxapp/11.0.5.12 (Baidu; P1 11)',
+                    },
+                },
+            },
+            {
+                title: 'parses quoted Surge header keys and values',
+                input: `Surge Quoted Headers = https,quoted.example.com,443,headers='Host':'153.3.236.22:443';"X-T5-Auth":"683556433";Connection:"Keep-Alive";"User-Agent":"okhttp/3.11.0 Dalvik/2.1.0 (Linux; U; Android 11; Redmi K30 5G Build/RKQ1.200826.002) baiduboxapp/11.0.5.12 (Baidu; P1 11)",sni=sni.example.com`,
+                expected: {
+                    type: 'http',
+                    name: 'Surge Quoted Headers',
+                    server: 'quoted.example.com',
+                    port: 443,
+                    tls: true,
+                    headers: {
+                        Host: '153.3.236.22:443',
+                        'X-T5-Auth': '683556433',
+                        Connection: 'Keep-Alive',
+                        'User-Agent':
+                            'okhttp/3.11.0 Dalvik/2.1.0 (Linux; U; Android 11; Redmi K30 5G Build/RKQ1.200826.002) baiduboxapp/11.0.5.12 (Baidu; P1 11)',
+                    },
+                    sni: 'sni.example.com',
+                },
+            },
+            {
+                title: 'parses Surge headers with nested quote values containing commas',
+                input: `Surge Nested Headers = https,nested.example.com,443,headers="Host:"nested.example.com";X-Comma:"a,b";User-Agent:"client/1.0 (Linux; U; Android 11)"",sni=sni.example.com`,
+                expected: {
+                    type: 'http',
+                    name: 'Surge Nested Headers',
+                    server: 'nested.example.com',
+                    port: 443,
+                    tls: true,
+                    headers: {
+                        Host: 'nested.example.com',
+                        'X-Comma': 'a,b',
+                        'User-Agent': 'client/1.0 (Linux; U; Android 11)',
+                    },
+                    sni: 'sni.example.com',
+                },
+            },
+            {
+                title: 'parses Surge headers with nested quote values containing quote characters',
+                input: `Surge Nested Quote Headers = https,quote.example.com,443,headers="X-Quote:"a"b";X-Semi:"x;y"",sni=sni.example.com`,
+                expected: {
+                    type: 'http',
+                    name: 'Surge Nested Quote Headers',
+                    server: 'quote.example.com',
+                    port: 443,
+                    tls: true,
+                    headers: {
+                        'X-Quote': 'a"b',
+                        'X-Semi': 'x;y',
+                    },
+                    sni: 'sni.example.com',
+                },
+            },
+            {
+                title: 'parses unwrapped Surge headers that start with quoted keys',
+                input: `Surge Quoted Key Start = http,quoted-key.example.com,8080,headers='Host':'quoted-key.example.com';"X-Token":"abc",test-url=http://example.com`,
+                expected: {
+                    type: 'http',
+                    name: 'Surge Quoted Key Start',
+                    server: 'quoted-key.example.com',
+                    port: 8080,
+                    headers: {
+                        Host: 'quoted-key.example.com',
+                        'X-Token': 'abc',
+                    },
+                    'test-url': 'http://example.com',
                 },
             },
             {
@@ -2729,7 +3055,7 @@ describe('Platform raw-format parser coverage', function () {
             },
             {
                 title: 'parses https auth lines',
-                input: 'Surge HTTPS = https,surge-http.example.com,8443,user,pass,sni=sni.example.com,skip-cert-verify=true',
+                input: 'Surge HTTPS = https,surge-http.example.com,8443,user,pass,headers=X-Token:abc,sni=sni.example.com,skip-cert-verify=true',
                 expected: {
                     type: 'http',
                     name: 'Surge HTTPS',
@@ -2738,6 +3064,9 @@ describe('Platform raw-format parser coverage', function () {
                     username: 'user',
                     password: 'pass',
                     tls: true,
+                    headers: {
+                        'X-Token': 'abc',
+                    },
                     sni: 'sni.example.com',
                     'skip-cert-verify': true,
                 },

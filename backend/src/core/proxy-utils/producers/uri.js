@@ -1,5 +1,6 @@
 /* eslint-disable no-case-declarations */
 import { Base64 } from 'js-base64';
+import $ from '@/core/app';
 import { isIPv6, isPlainObject } from '@/utils';
 import { getWireGuardAddressWithCIDR, normalizePluginMuxValue } from './utils';
 import {
@@ -8,6 +9,15 @@ import {
     normalizeXhttpPositiveRange,
     normalizeXhttpScalarUpperBound,
 } from '../xhttp-utils';
+import {
+    extractPathQueryParam,
+    parseSafeIntegerValue,
+    setPathQueryParam,
+} from '../transport-path';
+import {
+    buildXrayEchConfigListFromMihomo,
+    buildXrayEchFieldsFromMihomo,
+} from '../ech-utils';
 
 function toStringHeaderMap(headers, { excludeHost = false } = {}) {
     if (!isPlainObject(headers)) {
@@ -28,12 +38,75 @@ function toStringHeaderMap(headers, { excludeHost = false } = {}) {
     return Object.keys(parsedHeaders).length > 0 ? parsedHeaders : undefined;
 }
 
+function getHttpUpgradeEarlyData(transportOpts, path) {
+    const httpUpgradeEd = getSafeEarlyDataValue(
+        transportOpts?.['_v2ray-http-upgrade-ed'],
+    );
+    if (httpUpgradeEd !== '') return httpUpgradeEd;
+
+    const pathEd = getSafeEarlyDataValue(
+        extractPathQueryParam(path || '/', 'ed').value,
+    );
+    return pathEd !== '' ? pathEd : 2560;
+}
+
+function setHttpUpgradeEarlyDataPath(path, transportOpts) {
+    if (!transportOpts?.['v2ray-http-upgrade-fast-open']) {
+        return path;
+    }
+
+    return setPathQueryParam(
+        path || '/',
+        'ed',
+        getHttpUpgradeEarlyData(transportOpts, path),
+    );
+}
+
+function setWebSocketEarlyDataPath(path, transportOpts) {
+    const earlyDataValue = transportOpts?.['max-early-data'];
+    const earlyData = getSafeEarlyDataValue(earlyDataValue);
+    if (earlyData === '') {
+        if (earlyDataValue != null && `${earlyDataValue}` !== '') {
+            return path == null ? path : extractPathQueryParam(path, 'ed').path;
+        }
+        return path;
+    }
+
+    const earlyDataHeaderName = transportOpts?.['early-data-header-name'];
+    if (
+        earlyDataHeaderName &&
+        earlyDataHeaderName !== 'Sec-WebSocket-Protocol'
+    ) {
+        return path == null ? path : extractPathQueryParam(path, 'ed').path;
+    }
+
+    return setPathQueryParam(path || '/', 'ed', earlyData);
+}
+
+function getSafeEarlyDataValue(value) {
+    if (value == null || `${value}` === '') return '';
+    return parseSafeIntegerValue(value) == null ? '' : `${value}`;
+}
+
 function parseIntegerLikeValue(value) {
     return normalizeXhttpIntegerValue(value);
 }
 
 function getSerializableXhttpRangeValue(value) {
     return normalizeXhttpNonNegativeRange(value);
+}
+
+function warnEchDefaultDns({
+    defaultDns,
+    dnsFieldPath,
+    echOptsPath,
+    proxyName,
+    queryServerName,
+}) {
+    const proxyLabel = proxyName || '未命名节点';
+    $.warn(
+        `URI ECH: 节点 "${proxyLabel}" 的 ${echOptsPath} 已开启且设置 query-server-name="${queryServerName}", 但未设置 ${dnsFieldPath}; 已使用默认 DNS ${defaultDns}. 如需自定义, 请设置 ${dnsFieldPath}.`,
+    );
 }
 
 function getTransportHost(network, transportOpts = {}) {
@@ -191,7 +264,11 @@ function applyStructuredXhttpExtraFields(
     }
 }
 
-function buildXhttpDownloadSettings(downloadSettings) {
+function buildXhttpDownloadSettings(
+    downloadSettings,
+    outerXhttpOpts = {},
+    proxy = {},
+) {
     if (!isPlainObject(downloadSettings)) {
         return undefined;
     }
@@ -240,11 +317,27 @@ function buildXhttpDownloadSettings(downloadSettings) {
             ? downloadSettings.alpn
             : [downloadSettings.alpn];
     }
-    if (
-        isPlainObject(downloadSettings['ech-opts']) &&
-        downloadSettings['ech-opts'].config
-    ) {
-        tlsSettings.echConfigList = downloadSettings['ech-opts'].config;
+    const echFields = buildXrayEchFieldsFromMihomo(
+        downloadSettings['ech-opts'],
+        undefined,
+        {
+            dnsFieldPath: 'xhttp-opts.download-settings.ech-opts._dns',
+            warnDefaultDns: (context) =>
+                warnEchDefaultDns({
+                    ...context,
+                    echOptsPath: 'xhttp-opts.download-settings.ech-opts',
+                    proxyName: proxy.name,
+                }),
+        },
+    );
+    if (echFields.echConfigList) {
+        tlsSettings.echConfigList = echFields.echConfigList;
+    }
+    if (echFields.echForceQuery) {
+        tlsSettings.echForceQuery = echFields.echForceQuery;
+    }
+    if (echFields.echSockopt) {
+        tlsSettings.echSockopt = cloneXhttpExtraValue(echFields.echSockopt);
     }
     if (Object.keys(tlsSettings).length > 0) {
         result.tlsSettings = tlsSettings;
@@ -271,12 +364,22 @@ function buildXhttpDownloadSettings(downloadSettings) {
     }
 
     const xhttpSettings = {};
-    if (downloadSettings.path) {
-        xhttpSettings.path = downloadSettings.path;
+    // Mirror Mihomo's inheritance: path and host fall back to outer xhttp-opts
+    // when not explicitly set in download-settings. Mode is never a field in
+    // Mihomo's XHTTPDownloadSettings struct, so it always comes from outer.
+    const dsPath = downloadSettings.path ?? outerXhttpOpts.path;
+    if (dsPath) {
+        xhttpSettings.path = dsPath;
     }
-    const downloadHost = getTransportHost('xhttp', downloadSettings);
+    const downloadHost =
+        getTransportHost('xhttp', downloadSettings) ??
+        getTransportHost('xhttp', outerXhttpOpts);
     if (downloadHost) {
         xhttpSettings.host = downloadHost;
+    }
+    const mode = downloadSettings.mode ?? outerXhttpOpts.mode;
+    if (mode) {
+        xhttpSettings.mode = mode;
     }
     applyStructuredXhttpExtraFields(xhttpSettings, downloadSettings, {
         excludeHostHeader: true,
@@ -298,11 +401,15 @@ function buildXhttpDownloadSettings(downloadSettings) {
         network: normalizedNetwork || 'xhttp',
         ...(result.port != null ? { port: result.port } : {}),
         ...(result.security != null ? { security: result.security } : {}),
-        ...(result.tlsSettings != null ? { tlsSettings: result.tlsSettings } : {}),
+        ...(result.tlsSettings != null
+            ? { tlsSettings: result.tlsSettings }
+            : {}),
         ...(result.realitySettings != null
             ? { realitySettings: result.realitySettings }
             : {}),
-        ...(result.xhttpSettings != null ? { xhttpSettings: result.xhttpSettings } : {}),
+        ...(result.xhttpSettings != null
+            ? { xhttpSettings: result.xhttpSettings }
+            : {}),
     };
 }
 
@@ -316,6 +423,8 @@ function buildStructuredVlessExtraObject(proxy) {
 
     const downloadSettings = buildXhttpDownloadSettings(
         xhttpOpts['download-settings'],
+        xhttpOpts,
+        proxy,
     );
     if (downloadSettings) {
         extra.downloadSettings = downloadSettings;
@@ -471,8 +580,21 @@ function vless(proxy) {
         pcs = `&pcs=${encodeURIComponent(proxy['tls-fingerprint'])}`;
     }
     let ech = '';
-    if (proxy._echConfigList) {
-        ech = `&ech=${encodeURIComponent(proxy._echConfigList)}`;
+    const echConfigList = buildXrayEchConfigListFromMihomo(
+        proxy['ech-opts'],
+        proxy._echConfigList,
+        {
+            dnsFieldPath: 'ech-opts._dns',
+            warnDefaultDns: (context) =>
+                warnEchDefaultDns({
+                    ...context,
+                    echOptsPath: 'ech-opts',
+                    proxyName: proxy.name,
+                }),
+        },
+    );
+    if (echConfigList) {
+        ech = `&ech=${encodeURIComponent(echConfigList)}`;
     }
     let sni = '';
     if (proxy.sni) {
@@ -535,16 +657,35 @@ function vless(proxy) {
     }
 
     const transportOpts = proxy[`${proxy.network}-opts`] || {};
+    const isVlessHttpUpgrade =
+        proxy.network === 'ws' && transportOpts?.['v2ray-http-upgrade'];
     let vlessTransportServiceName =
         transportOpts?.[`${proxy.network}-service-name`];
     let vlessTransportPath = transportOpts?.path;
     let vlessTransportHost = getTransportHost(proxy.network, transportOpts);
+    const vlessWsEarlyData = getSafeEarlyDataValue(
+        proxy['ws-opts']?.['max-early-data'],
+    );
+    if (Array.isArray(vlessTransportPath)) {
+        vlessTransportPath = vlessTransportPath[0];
+    }
+    if (isVlessHttpUpgrade && transportOpts?.['v2ray-http-upgrade-fast-open']) {
+        vlessTransportPath = setHttpUpgradeEarlyDataPath(
+            vlessTransportPath,
+            transportOpts,
+        );
+    } else if (
+        proxy.network === 'ws' &&
+        proxy['ws-opts']?.['max-early-data'] != null &&
+        vlessTransportPath
+    ) {
+        vlessTransportPath = extractPathQueryParam(
+            vlessTransportPath,
+            'ed',
+        ).path;
+    }
     if (vlessTransportPath) {
-        vlessTransport += `&path=${encodeURIComponent(
-            Array.isArray(vlessTransportPath)
-                ? vlessTransportPath[0]
-                : vlessTransportPath,
-        )}`;
+        vlessTransport += `&path=${encodeURIComponent(vlessTransportPath)}`;
     }
     if (vlessTransportHost) {
         vlessTransport += `&host=${encodeURIComponent(
@@ -575,26 +716,15 @@ function vless(proxy) {
     }
     if (
         proxy.network === 'ws' &&
-        !proxy['ws-opts']?.['v2ray-http-upgrade'] &&
-        proxy['ws-opts']?.['max-early-data'] != null
+        !isVlessHttpUpgrade &&
+        vlessWsEarlyData !== ''
     ) {
-        vlessTransport += `&ed=${encodeURIComponent(
-            proxy['ws-opts']['max-early-data'],
-        )}`;
-    }
-    if (
-        proxy.network === 'ws' &&
-        proxy['ws-opts']?.['v2ray-http-upgrade'] &&
-        proxy['ws-opts']?.['max-early-data'] != null
-    ) {
-        vlessTransport += `&ed=${encodeURIComponent(
-            proxy['ws-opts']['max-early-data'],
-        )}`;
+        vlessTransport += `&ed=${encodeURIComponent(vlessWsEarlyData)}`;
     }
     const earlyDataHeaderName = proxy['ws-opts']?.['early-data-header-name'];
     if (
         earlyDataHeaderName &&
-        (proxy['ws-opts']?.['v2ray-http-upgrade'] ||
+        (isVlessHttpUpgrade ||
             proxy['ws-opts']?.['max-early-data'] == null ||
             earlyDataHeaderName !== 'Sec-WebSocket-Protocol')
     ) {
@@ -745,16 +875,33 @@ export default function URI_Producer() {
                                 'gun',
                         )}`;
                     }
-                    let ssTransportPath = proxy[`${proxy.network}-opts`]?.path;
+                    const ssTransportOpts =
+                        proxy[`${proxy.network}-opts`] || {};
+                    const isSsHttpUpgrade =
+                        proxy.network === 'ws' &&
+                        ssTransportOpts?.['v2ray-http-upgrade'];
+                    let ssTransportPath = ssTransportOpts?.path;
                     let ssTransportHost =
-                        proxy[`${proxy.network}-opts`]?.headers?.[
+                        ssTransportOpts?.headers?.[
                             proxy.network === 'h2' ? 'host' : 'Host'
                         ];
+                    if (Array.isArray(ssTransportPath)) {
+                        ssTransportPath = ssTransportPath[0];
+                    }
+                    if (isSsHttpUpgrade) {
+                        ssTransportPath = setHttpUpgradeEarlyDataPath(
+                            ssTransportPath,
+                            ssTransportOpts,
+                        );
+                    } else if (proxy.network === 'ws') {
+                        ssTransportPath = setWebSocketEarlyDataPath(
+                            ssTransportPath,
+                            ssTransportOpts,
+                        );
+                    }
                     if (ssTransportPath) {
                         ssTransport += `&path=${encodeURIComponent(
-                            Array.isArray(ssTransportPath)
-                                ? ssTransportPath[0]
-                                : ssTransportPath,
+                            ssTransportPath,
                         )}`;
                     }
                     if (ssTransportHost) {
@@ -867,10 +1014,14 @@ export default function URI_Producer() {
                 }
                 // obfs
                 if (proxy.network) {
-                    let vmessTransportPath =
-                        proxy[`${proxy.network}-opts`]?.path;
+                    const vmessTransportOpts =
+                        proxy[`${proxy.network}-opts`] || {};
+                    const isVmessHttpUpgrade =
+                        proxy.network === 'ws' &&
+                        vmessTransportOpts?.['v2ray-http-upgrade'];
+                    let vmessTransportPath = vmessTransportOpts?.path;
                     let vmessTransportHost =
-                        proxy[`${proxy.network}-opts`]?.headers?.[
+                        vmessTransportOpts?.headers?.[
                             proxy.network === 'h2' ? 'host' : 'Host'
                         ];
 
@@ -900,10 +1051,22 @@ export default function URI_Producer() {
                                 `_${proxy.network}-path`
                             ];
                     } else {
+                        if (Array.isArray(vmessTransportPath)) {
+                            vmessTransportPath = vmessTransportPath[0];
+                        }
+                        if (isVmessHttpUpgrade) {
+                            vmessTransportPath = setHttpUpgradeEarlyDataPath(
+                                vmessTransportPath,
+                                vmessTransportOpts,
+                            );
+                        } else if (proxy.network === 'ws') {
+                            vmessTransportPath = setWebSocketEarlyDataPath(
+                                vmessTransportPath,
+                                vmessTransportOpts,
+                            );
+                        }
                         if (vmessTransportPath) {
-                            result.path = Array.isArray(vmessTransportPath)
-                                ? vmessTransportPath[0]
-                                : vmessTransportPath;
+                            result.path = vmessTransportPath;
                         }
                         if (vmessTransportHost) {
                             result.host = Array.isArray(vmessTransportHost)
@@ -950,17 +1113,33 @@ export default function URI_Producer() {
                                 'gun',
                         )}`;
                     }
-                    let trojanTransportPath =
-                        proxy[`${proxy.network}-opts`]?.path;
+                    const trojanTransportOpts =
+                        proxy[`${proxy.network}-opts`] || {};
+                    const isTrojanHttpUpgrade =
+                        proxy.network === 'ws' &&
+                        trojanTransportOpts?.['v2ray-http-upgrade'];
+                    let trojanTransportPath = trojanTransportOpts?.path;
                     let trojanTransportHost =
-                        proxy[`${proxy.network}-opts`]?.headers?.[
+                        trojanTransportOpts?.headers?.[
                             proxy.network === 'h2' ? 'host' : 'Host'
                         ];
+                    if (Array.isArray(trojanTransportPath)) {
+                        trojanTransportPath = trojanTransportPath[0];
+                    }
+                    if (isTrojanHttpUpgrade) {
+                        trojanTransportPath = setHttpUpgradeEarlyDataPath(
+                            trojanTransportPath,
+                            trojanTransportOpts,
+                        );
+                    } else if (proxy.network === 'ws') {
+                        trojanTransportPath = setWebSocketEarlyDataPath(
+                            trojanTransportPath,
+                            trojanTransportOpts,
+                        );
+                    }
                     if (trojanTransportPath) {
                         trojanTransport += `&path=${encodeURIComponent(
-                            Array.isArray(trojanTransportPath)
-                                ? trojanTransportPath[0]
-                                : trojanTransportPath,
+                            trojanTransportPath,
                         )}`;
                     }
                     if (trojanTransportHost) {

@@ -16,7 +16,37 @@ Advanced Subscription Manager for QX, Loon, Surge, Stash, Egern and Shadowrocket
 
 [📚 文档/DOC](https://github.com/sub-store-org/Sub-Store/wiki)
 
-Core functionalities:
+## sub.store Domain Safety Notice
+
+### Statement
+
+⚠️ `sub.store` is only the domain used by module-script rewrite MitM rules. It is not a public domain owned by us.
+
+### Risk
+
+If a request does not go through the rewrite, the data will be sent to the public `sub.store` service.
+
+You can map `sub.store` to `127.0.0.1` or another local address to prevent accidental access to the public `sub.store`. However, ordinary users may still send requests to the public `sub.store` after switching or toggling configuration modules.
+
+1. It could, in theory, redirect users to a fake frontend. This is only a possibility and does not imply that the owner of `sub.store` would do this. Note: The official frontend is `https://sub-store.vercel.app`.
+2. It could receive user data from `sub.store`.
+
+This creates a data leakage risk.
+
+### Plan
+
+After listening to suggestions from the group, we will not switch to a new domain for now. Choosing a new domain is also awkward: it needs to be related, short, and unlikely to be registered by someone else, at least in the short term.
+
+This notice is published only as an announcement. No changes will be made for now.
+
+Example:
+
+```
+[Host]
+sub.store = 127.0.0.1
+```
+
+## Core functionalities:
 
 1. Conversion among various formats.
 2. Subscription formatting.
@@ -44,8 +74,8 @@ Core functionalities:
   > [NaiveProxy](https://t.me/zhetengsha/4308)
 - [x] QX (SS, SSR, VMess, Trojan, HTTP, SOCKS5, VLESS, AnyTLS)
 - [x] Loon (SS, SSR, VMess, Trojan, HTTP, SOCKS5, SOCKS5-TLS, WireGuard, VLESS, Hysteria 2, AnyTLS)
-- [x] Surge (Direct, SS, VMess, Trojan, HTTP, SOCKS5, SOCKS5-TLS, AnyTLS, TrustTunnel, TUIC, Snell, Hysteria 2, SSH(Password authentication only), External Proxy Program(only for macOS), WireGuard(Surge to Surge))
-- [x] mihomo(Clash.Meta) Compatible (Direct, SS, SSR, VMess, Trojan, HTTP, SOCKS5, Snell, VLESS, WireGuard, Hysteria, Hysteria 2, TUIC, SSH, mieru, sudoku, AnyTLS, MASQUE, Tailscale)
+- [x] Surge (Direct, SS, VMess, Trojan, HTTP, HTTPS, HTTP/2 CONNECT, SOCKS5, SOCKS5-TLS, AnyTLS, TrustTunnel, TUIC, Snell, Hysteria 2, SSH(Password authentication only), External Proxy Program(only for macOS), WireGuard(Surge to Surge))
+- [x] mihomo(Clash.Meta) Compatible (Direct, SS, SSR, VMess, Trojan, HTTP, SOCKS5, Snell, VLESS, WireGuard, Hysteria, Hysteria 2, TUIC, SSH, mieru, sudoku, AnyTLS, MASQUE, Tailscale, GOST Relay)
 
 Deprecated(The frontend doesn't show it, but the backend still supports it, with the query parameter `target=Clash`):
 

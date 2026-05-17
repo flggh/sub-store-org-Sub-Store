@@ -5,6 +5,7 @@ import {
     RULES_KEY,
     SUBS_KEY,
     FILES_KEY,
+    SETTINGS_KEY,
 } from '@/constants';
 import { failed, success } from '@/restful/response';
 import { InternalServerError, ResourceNotFoundError } from '@/restful/errors';
@@ -12,7 +13,10 @@ import { findByName } from '@/utils/database';
 import download from '@/utils/download';
 import { ProxyUtils } from '@/core/proxy-utils';
 import { RuleUtils } from '@/core/rule-utils';
-import { syncToGist } from '@/restful/artifacts';
+import {
+    normalizeArtifactSyncBatchSize,
+    syncToGist,
+} from '@/restful/artifacts';
 import {
     buildEmptySubscriptionOutput,
     handleIgnoreFailedRemoteSubError,
@@ -710,6 +714,122 @@ async function produceArtifact({
     }
 }
 
+function createArtifactUploadBatches(names, batchSize) {
+    const batches = [];
+    for (let index = 0; index < names.length; index += batchSize) {
+        batches.push(names.slice(index, index + batchSize));
+    }
+    return batches;
+}
+
+function normalizeUploadResponseFiles(files) {
+    if (Array.isArray(files)) {
+        return {
+            isGitLab: true,
+            files: Object.fromEntries(files.map((item) => [item.path, item])),
+        };
+    }
+
+    return {
+        isGitLab: false,
+        files: files || {},
+    };
+}
+
+function logUploadResponse(body) {
+    delete body.history;
+    delete body.forks;
+    delete body.owner;
+    if (body.files) {
+        Object.values(body.files).forEach((file) => {
+            delete file.content;
+        });
+    }
+    $.info('上传配置响应:');
+    $.info(JSON.stringify(body, null, 2));
+}
+
+function resolveArtifactUploadUrl(body, artifactName) {
+    const { files, isGitLab } = normalizeUploadResponseFiles(body.files);
+    const encodedName = encodeURIComponent(artifactName);
+    const raw_url = files[encodedName]?.raw_url;
+    const new_url = isGitLab
+        ? raw_url
+        : raw_url?.replace(/\/raw\/[^/]*\/(.*)/, '/raw/$1');
+    $.info(
+        `上传配置完成\n文件列表: ${Object.keys(files).join(
+            ', ',
+        )}\n当前文件: ${encodedName}\n响应返回的原始链接: ${raw_url}\n处理完的新链接: ${new_url}`,
+    );
+    return new_url;
+}
+
+async function uploadArtifactBatches({ allArtifacts, files, valid, invalid }) {
+    const settings = $.read(SETTINGS_KEY) || {};
+    const batchSize = normalizeArtifactSyncBatchSize(
+        settings.artifactSyncBatchSize,
+    );
+    const batches = createArtifactUploadBatches(valid, batchSize);
+    const uploaded = [];
+
+    $.info(
+        `准备分批上传同步配置: 共 ${valid.length} 个, 每批 ${batchSize} 个, 批次数 ${batches.length}`,
+    );
+
+    for (let index = 0; index < batches.length; index++) {
+        const batchNames = batches[index];
+        const batchFiles = Object.fromEntries(
+            batchNames.map((name) => [
+                encodeURIComponent(name),
+                files[encodeURIComponent(name)],
+            ]),
+        );
+
+        try {
+            $.info(
+                `正在上传第 ${index + 1}/${batches.length} 批同步配置: ${batchNames.join(
+                    ', ',
+                )}`,
+            );
+            const resp = await syncToGist(batchFiles);
+            const body = JSON.parse(resp.body);
+            logUploadResponse(body);
+
+            for (const artifact of allArtifacts) {
+                if (
+                    artifact.sync &&
+                    artifact.source &&
+                    batchNames.includes(artifact.name)
+                ) {
+                    const newUrl = resolveArtifactUploadUrl(
+                        body,
+                        artifact.name,
+                    );
+                    if (newUrl) {
+                        artifact.updated = new Date().getTime();
+                        artifact.url = newUrl;
+                        uploaded.push(artifact.name);
+                    } else {
+                        $.error(
+                            `同步配置 ${artifact.name} 上传成功但响应中未找到文件链接`,
+                        );
+                        invalid.push(artifact.name);
+                    }
+                }
+            }
+        } catch (e) {
+            $.error(
+                `第 ${index + 1}/${batches.length} 批同步配置上传失败: ${batchNames.join(
+                    ', ',
+                )}, 原因: ${e.message ?? e}`,
+            );
+            invalid.push(...batchNames);
+        }
+    }
+
+    return uploaded;
+}
+
 async function syncArtifacts() {
     $.info('开始同步所有远程配置...');
     const allArtifacts = $.read(ARTIFACTS_KEY) || [];
@@ -824,59 +944,22 @@ async function syncArtifacts() {
             );
         }
 
-        const resp = await syncToGist(files);
-        const body = JSON.parse(resp.body);
-
-        delete body.history;
-        delete body.forks;
-        delete body.owner;
-        Object.values(body.files).forEach((file) => {
-            delete file.content;
+        const uploaded = await uploadArtifactBatches({
+            allArtifacts,
+            files,
+            valid,
+            invalid,
         });
-        $.info('上传配置响应:');
-        $.info(JSON.stringify(body, null, 2));
-
-        for (const artifact of allArtifacts) {
-            if (
-                artifact.sync &&
-                artifact.source &&
-                valid.includes(artifact.name)
-            ) {
-                artifact.updated = new Date().getTime();
-                // extract real url from gist
-                let files = body.files;
-                let isGitLab;
-                if (Array.isArray(files)) {
-                    isGitLab = true;
-                    files = Object.fromEntries(
-                        files.map((item) => [item.path, item]),
-                    );
-                }
-                const raw_url =
-                    files[encodeURIComponent(artifact.name)]?.raw_url;
-                const new_url = isGitLab
-                    ? raw_url
-                    : raw_url?.replace(/\/raw\/[^/]*\/(.*)/, '/raw/$1');
-                $.info(
-                    `上传配置完成\n文件列表: ${Object.keys(files).join(
-                        ', ',
-                    )}\n当前文件: ${encodeURIComponent(
-                        artifact.name,
-                    )}\n响应返回的原始链接: ${raw_url}\n处理完的新链接: ${new_url}`,
-                );
-                artifact.url = new_url;
-            }
-        }
 
         $.write(allArtifacts, ARTIFACTS_KEY);
         $.info('上传配置成功');
 
         if (invalid.length > 0) {
             throw new Error(
-                `同步配置成功 ${valid.length} 个, 失败 ${invalid.length} 个, 详情请查看日志`,
+                `同步配置成功 ${uploaded.length} 个, 失败 ${invalid.length} 个, 详情请查看日志`,
             );
         } else {
-            $.info(`同步配置成功 ${valid.length} 个`);
+            $.info(`同步配置成功 ${uploaded.length} 个`);
         }
     } catch (e) {
         $.error(`同步配置失败，原因：${e.message ?? e}`);
@@ -967,32 +1050,8 @@ async function syncArtifact(req, res) {
         artifact.updated = new Date().getTime();
         const body = JSON.parse(resp.body);
 
-        delete body.history;
-        delete body.forks;
-        delete body.owner;
-        Object.values(body.files).forEach((file) => {
-            delete file.content;
-        });
-        $.info('上传配置响应:');
-        $.info(JSON.stringify(body, null, 2));
-
-        let files = body.files;
-        let isGitLab;
-        if (Array.isArray(files)) {
-            isGitLab = true;
-            files = Object.fromEntries(files.map((item) => [item.path, item]));
-        }
-        const raw_url = files[encodeURIComponent(artifact.name)]?.raw_url;
-        const new_url = isGitLab
-            ? raw_url
-            : raw_url?.replace(/\/raw\/[^/]*\/(.*)/, '/raw/$1');
-        $.info(
-            `上传配置完成\n文件列表: ${Object.keys(files).join(
-                ', ',
-            )}\n当前文件: ${encodeURIComponent(
-                artifact.name,
-            )}\n响应返回的原始链接: ${raw_url}\n处理完的新链接: ${new_url}`,
-        );
+        logUploadResponse(body);
+        const new_url = resolveArtifactUploadUrl(body, artifact.name);
         artifact.url = new_url;
         $.write(allArtifacts, ARTIFACTS_KEY);
         success(res, artifact);
@@ -1009,4 +1068,4 @@ async function syncArtifact(req, res) {
     }
 }
 
-export { produceArtifact, syncArtifacts };
+export { produceArtifact, syncArtifacts, uploadArtifactBatches };

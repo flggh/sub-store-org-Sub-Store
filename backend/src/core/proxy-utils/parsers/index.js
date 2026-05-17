@@ -24,6 +24,12 @@ import {
     normalizeXhttpPositiveRange,
     normalizeXhttpScalarUpperBound,
 } from '../xhttp-utils';
+import { extractPathQueryParam, getPathQueryParam } from '../transport-path';
+import {
+    buildMihomoEchOptsFromXrayFields,
+    isSupportedXrayEchConfigList,
+    isSupportedXrayEchForceQuery,
+} from '../ech-utils';
 
 // 只在第一个 = 处分割，保留值中的 = 字符（如 Base64 编码的 WireGuard 密钥）
 function splitKV(str) {
@@ -52,6 +58,56 @@ function splitURIFragment(raw) {
         content,
         fragment: fragment != null ? decodeURIComponent(fragment) : undefined,
     };
+}
+
+function decodeShadowsocksUserInfo(rawUserInfoStr) {
+    const separatorIndex = rawUserInfoStr.indexOf(':');
+    if (separatorIndex !== -1) {
+        return [
+            decodeURIComponent(rawUserInfoStr.slice(0, separatorIndex)),
+            decodeURIComponent(rawUserInfoStr.slice(separatorIndex + 1)),
+        ].join(':');
+    }
+
+    const decodedUserInfoStr = decodeURIComponent(rawUserInfoStr);
+    if (decodedUserInfoStr.includes(':')) {
+        return decodedUserInfoStr;
+    }
+
+    return Base64.decode(decodedUserInfoStr);
+}
+
+function isNumericEarlyData(value) {
+    if (value == null || !/^\d+$/.test(`${value}`)) return false;
+
+    return Number.isSafeInteger(parseInt(`${value}`, 10));
+}
+
+function extractEarlyDataFromPath(path) {
+    const ed = getPathQueryParam(path, 'ed');
+    if (!isNumericEarlyData(ed)) {
+        return {
+            path,
+            ed: '',
+        };
+    }
+
+    return {
+        path: extractPathQueryParam(path, 'ed').path,
+        ed,
+    };
+}
+
+function parseEarlyDataSize(value) {
+    const raw = `${value}`;
+    if (!/^\d+$/.test(raw)) {
+        throw new Error(`bad WebSocket max early data size: ${value}`);
+    }
+    const parsed = parseInt(raw, 10);
+    if (!Number.isSafeInteger(parsed)) {
+        throw new Error(`bad WebSocket max early data size: ${value}`);
+    }
+    return parsed;
 }
 
 function parseWireGuardURIAddressValue(value) {
@@ -190,13 +246,7 @@ function URI_SS() {
         // handle IPV4 and IPV6
         let serverAndPortArray = content.match(/@([^/?]*)(\/|\?|$)/);
 
-        let rawUserInfoStr = decodeURIComponent(content.split('@')[0]); // 其实应该分隔之后, 用户名和密码再 decodeURIComponent. 但是问题不大
-        let userInfoStr;
-        if (rawUserInfoStr?.startsWith('2022-blake3-')) {
-            userInfoStr = rawUserInfoStr;
-        } else {
-            userInfoStr = Base64.decode(rawUserInfoStr);
-        }
+        let userInfoStr = decodeShadowsocksUserInfo(content.split('@')[0]);
 
         let query = '';
         if (!serverAndPortArray) {
@@ -254,6 +304,8 @@ function URI_SS() {
 
         if (params['type']) {
             let httpupgrade;
+            let httpUpgradeEd = '';
+            let pathEarlyData = '';
             proxy.network = params['type'];
             if (proxy.network === 'httpupgrade') {
                 proxy.network = 'ws';
@@ -267,11 +319,18 @@ function URI_SS() {
                 };
             } else {
                 if (params['path']) {
-                    _.set(
-                        proxy,
-                        proxy.network + '-opts.path',
-                        params['path'],
-                    );
+                    let transportPath = params['path'];
+                    if (proxy.network === 'ws') {
+                        const extracted =
+                            extractEarlyDataFromPath(transportPath);
+                        transportPath = extracted.path;
+                        if (httpupgrade) {
+                            httpUpgradeEd = extracted.ed;
+                        } else {
+                            pathEarlyData = extracted.ed;
+                        }
+                    }
+                    _.set(proxy, proxy.network + '-opts.path', transportPath);
                 }
                 if (params['host']) {
                     _.set(
@@ -281,15 +340,37 @@ function URI_SS() {
                     );
                 }
                 if (httpupgrade) {
+                    httpUpgradeEd =
+                        httpUpgradeEd ||
+                        (isNumericEarlyData(params.ed) ? `${params.ed}` : '');
                     _.set(
                         proxy,
                         proxy.network + '-opts.v2ray-http-upgrade',
                         true,
                     );
+                    if (httpUpgradeEd !== '') {
+                        _.set(
+                            proxy,
+                            proxy.network +
+                                '-opts.v2ray-http-upgrade-fast-open',
+                            true,
+                        );
+                        _.set(
+                            proxy,
+                            proxy.network + '-opts._v2ray-http-upgrade-ed',
+                            httpUpgradeEd,
+                        );
+                    }
+                } else if (proxy.network === 'ws' && pathEarlyData !== '') {
                     _.set(
                         proxy,
-                        proxy.network + '-opts.v2ray-http-upgrade-fast-open',
-                        true,
+                        proxy.network + '-opts.max-early-data',
+                        parseEarlyDataSize(pathEarlyData),
+                    );
+                    _.set(
+                        proxy,
+                        proxy.network + '-opts.early-data-header-name',
+                        'Sec-WebSocket-Protocol',
                     );
                 }
             }
@@ -676,6 +757,17 @@ function URI_VMess() {
                     // eslint-disable-next-line no-empty
                 } catch (e) {}
                 let transportPath = params.path;
+                let httpUpgradeEd = '';
+                let pathEarlyData = '';
+                if (proxy.network === 'ws' && transportPath) {
+                    const extracted = extractEarlyDataFromPath(transportPath);
+                    transportPath = extracted.path;
+                    if (httpupgrade) {
+                        httpUpgradeEd = extracted.ed;
+                    } else {
+                        pathEarlyData = extracted.ed;
+                    }
+                }
 
                 // 补上默认 path
                 if (['ws'].includes(proxy.network)) {
@@ -730,7 +822,23 @@ function URI_VMess() {
                         };
                         if (httpupgrade) {
                             opts['v2ray-http-upgrade'] = true;
-                            opts['v2ray-http-upgrade-fast-open'] = true;
+                            httpUpgradeEd =
+                                httpUpgradeEd ||
+                                (isNumericEarlyData(params.ed)
+                                    ? `${params.ed}`
+                                    : '');
+                            if (httpUpgradeEd !== '') {
+                                opts['v2ray-http-upgrade-fast-open'] = true;
+                                opts['_v2ray-http-upgrade-ed'] = httpUpgradeEd;
+                            }
+                        } else if (
+                            proxy.network === 'ws' &&
+                            pathEarlyData !== ''
+                        ) {
+                            opts['max-early-data'] =
+                                parseEarlyDataSize(pathEarlyData);
+                            opts['early-data-header-name'] =
+                                'Sec-WebSocket-Protocol';
                         }
                         proxy[`${proxy.network}-opts`] = opts;
                     }
@@ -1050,9 +1158,20 @@ function URI_VLESS() {
                 );
             }
 
+            if (
+                Object.prototype.hasOwnProperty.call(xhttpSettings, 'mode') &&
+                !isNotBlank(xhttpSettings.mode)
+            ) {
+                setUnsupportedXhttpField(
+                    unsupportedXhttpSettings,
+                    'mode',
+                    xhttpSettings.mode,
+                );
+            }
+
             const inlineExtra = {};
             for (const [key, value] of Object.entries(xhttpSettings)) {
-                if (['path', 'host', 'extra'].includes(key)) {
+                if (['path', 'host', 'mode', 'extra'].includes(key)) {
                     continue;
                 }
                 inlineExtra[key] = value;
@@ -1112,7 +1231,9 @@ function URI_VLESS() {
                         break;
                     case 'security': {
                         const normalizedSecurity =
-                            typeof value === 'string' ? value.toLowerCase() : '';
+                            typeof value === 'string'
+                                ? value.toLowerCase()
+                                : '';
                         if (!['tls', 'reality'].includes(normalizedSecurity)) {
                             setUnsupportedXhttpField(
                                 unsupportedDownloadSettings,
@@ -1133,12 +1254,50 @@ function URI_VLESS() {
                         }
 
                         const unsupportedTlsSettings = {};
-                        for (const [tlsKey, tlsValue] of Object.entries(value)) {
+                        const hasSupportedEchConfigList =
+                            isSupportedXrayEchConfigList(value.echConfigList);
+                        for (const [tlsKey, tlsValue] of Object.entries(
+                            value,
+                        )) {
                             switch (tlsKey) {
                                 case 'serverName':
                                 case 'fingerprint':
-                                case 'echConfigList':
                                     if (!isNotBlank(tlsValue)) {
+                                        setUnsupportedXhttpField(
+                                            unsupportedTlsSettings,
+                                            tlsKey,
+                                            tlsValue,
+                                        );
+                                    }
+                                    break;
+                                case 'echConfigList':
+                                    if (
+                                        !isSupportedXrayEchConfigList(tlsValue)
+                                    ) {
+                                        setUnsupportedXhttpField(
+                                            unsupportedTlsSettings,
+                                            tlsKey,
+                                            tlsValue,
+                                        );
+                                    }
+                                    break;
+                                case 'echForceQuery':
+                                    if (
+                                        !hasSupportedEchConfigList ||
+                                        !isSupportedXrayEchForceQuery(tlsValue)
+                                    ) {
+                                        setUnsupportedXhttpField(
+                                            unsupportedTlsSettings,
+                                            tlsKey,
+                                            tlsValue,
+                                        );
+                                    }
+                                    break;
+                                case 'echSockopt':
+                                    if (
+                                        !hasSupportedEchConfigList ||
+                                        !isPlainObject(tlsValue)
+                                    ) {
                                         setUnsupportedXhttpField(
                                             unsupportedTlsSettings,
                                             tlsKey,
@@ -1252,7 +1411,9 @@ function URI_VLESS() {
                     }
                     case 'network': {
                         const normalizedNetwork =
-                            typeof value === 'string' ? value.toLowerCase() : '';
+                            typeof value === 'string'
+                                ? value.toLowerCase()
+                                : '';
                         if (
                             normalizedNetwork !== 'xhttp' &&
                             normalizedNetwork !== 'splithttp'
@@ -1469,11 +1630,13 @@ function URI_VLESS() {
                 if (downloadSettings.tlsSettings.allowInsecure === true) {
                     parsedDownloadSettings['skip-cert-verify'] = true;
                 }
-                if (isNotBlank(downloadSettings.tlsSettings.echConfigList)) {
-                    parsedDownloadSettings['ech-opts'] = {
-                        enable: true,
-                        config: downloadSettings.tlsSettings.echConfigList,
-                    };
+                const echOpts = buildMihomoEchOptsFromXrayFields({
+                    echConfigList: downloadSettings.tlsSettings.echConfigList,
+                    echForceQuery: downloadSettings.tlsSettings.echForceQuery,
+                    echSockopt: downloadSettings.tlsSettings.echSockopt,
+                });
+                if (echOpts) {
+                    parsedDownloadSettings['ech-opts'] = echOpts;
                 }
             }
 
@@ -1514,6 +1677,10 @@ function URI_VLESS() {
                 if (isNotBlank(downloadSettings.xhttpSettings.host)) {
                     parsedDownloadSettings.host =
                         downloadSettings.xhttpSettings.host;
+                }
+                if (isNotBlank(downloadSettings.xhttpSettings.mode)) {
+                    parsedDownloadSettings.mode =
+                        downloadSettings.xhttpSettings.mode;
                 }
                 applyXhttpExtraFields(
                     parsedDownloadSettings,
@@ -1605,6 +1772,12 @@ function URI_VLESS() {
             ? /(TRUE)|1/i.test(params.allowInsecure)
             : undefined;
         proxy._echConfigList = getIfPresent(params.ech);
+        const echOpts = buildMihomoEchOptsFromXrayFields({
+            echConfigList: params.ech,
+        });
+        if (echOpts) {
+            proxy['ech-opts'] = echOpts;
+        }
         proxy['tls-fingerprint'] = getIfPresent(params.pcs);
         proxy._h2 = /(TRUE)|1/i.test(params.h2);
 
@@ -1657,6 +1830,7 @@ function URI_VLESS() {
 
         if (proxy.network && !['tcp', 'none'].includes(proxy.network)) {
             const opts = {};
+            let pathEarlyData = '';
             const host = params.host ?? params.obfsParam;
             if (host) {
                 if (params.obfsParam) {
@@ -1668,6 +1842,13 @@ function URI_VLESS() {
                     }
                 } else {
                     opts.headers = { Host: host };
+                }
+                if (['xhttp'].includes(proxy.network) && opts.headers?.Host) {
+                    opts.host = opts.headers.Host;
+                    delete opts.headers.Host;
+                    if (Object.keys(opts.headers).length === 0) {
+                        delete opts.headers;
+                    }
                 }
             }
             if (params.serviceName) {
@@ -1682,7 +1863,13 @@ function URI_VLESS() {
                 }
             }
             if (params.path) {
-                opts.path = params.path;
+                let transportPath = params.path;
+                if (proxy.network === 'ws') {
+                    const extracted = extractEarlyDataFromPath(transportPath);
+                    transportPath = extracted.path;
+                    pathEarlyData = extracted.ed;
+                }
+                opts.path = transportPath;
             }
             if (proxy.network === 'http' && params.method) {
                 opts.method = params.method;
@@ -1693,23 +1880,13 @@ function URI_VLESS() {
             }
             if (httpupgrade) {
                 opts['v2ray-http-upgrade'] = true;
-                opts['v2ray-http-upgrade-fast-open'] = true;
             }
-            if (params.ed) {
-                const maxEarlyDataRaw = `${params.ed}`;
-                if (!/^\d+$/.test(maxEarlyDataRaw)) {
-                    throw new Error(
-                        `bad WebSocket max early data size: ${params.ed}`,
-                    );
-                }
-                const maxEarlyData = parseInt(maxEarlyDataRaw, 10);
-                if (!Number.isSafeInteger(maxEarlyData)) {
-                    throw new Error(
-                        `bad WebSocket max early data size: ${params.ed}`,
-                    );
-                }
+            const earlyDataRaw = pathEarlyData || params.ed;
+            if (earlyDataRaw) {
+                const maxEarlyData = parseEarlyDataSize(earlyDataRaw);
                 if (httpupgrade) {
-                    opts['max-early-data'] = maxEarlyData;
+                    opts['v2ray-http-upgrade-fast-open'] = true;
+                    opts['_v2ray-http-upgrade-ed'] = `${earlyDataRaw}`;
                 } else if (proxy.network === 'ws') {
                     opts['max-early-data'] = maxEarlyData;
                     opts['early-data-header-name'] =
@@ -1771,9 +1948,12 @@ function URI_VLESS() {
                 // Supported fields must round-trip through the structured node
                 // so later edits are reflected on export, while unsupported
                 // fields still survive VLESS URI -> node -> VLESS URI flows.
-                const unsupportedExtra = collectUnsupportedRootXhttpExtra(extra, {
-                    parsedDownloadSettings: downloadSettings,
-                });
+                const unsupportedExtra = collectUnsupportedRootXhttpExtra(
+                    extra,
+                    {
+                        parsedDownloadSettings: downloadSettings,
+                    },
+                );
                 if (unsupportedExtra) {
                     proxy._extra_unsupported = unsupportedExtra;
                 }
@@ -2233,8 +2413,11 @@ function Clash_All() {
         }
         if (
             ![
+                'gost-relay',
+                'openvpn',
                 'tailscale',
                 'trusttunnel',
+                'h2-connect',
                 'naive',
                 'anytls',
                 'mieru',
@@ -2595,6 +2778,14 @@ function Surge_TrustTunnel() {
     const parse = (line) => getSurgeParser().parse(line);
     return { name, test, parse };
 }
+function Surge_H2Connect() {
+    const name = 'Surge HTTP/2 CONNECT Parser';
+    const test = (line) => {
+        return /^.*=\s*h2-connect/.test(line.split(',')[0]);
+    };
+    const parse = (line) => getSurgeParser().parse(line);
+    return { name, test, parse };
+}
 function Surge_SSH() {
     const name = 'Surge SSH Parser';
     const test = (line) => {
@@ -2799,6 +2990,7 @@ export default [
     Surge_Direct(),
     Surge_AnyTLS(),
     Surge_TrustTunnel(),
+    Surge_H2Connect(),
     Surge_SSH(),
     Surge_SS(),
     Surge_VMess(),

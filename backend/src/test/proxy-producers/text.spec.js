@@ -2,9 +2,34 @@ import { expect } from 'chai';
 import { Base64 } from 'js-base64';
 import { describe, it } from 'mocha';
 
+import $ from '@/core/app';
 import { ProxyUtils } from '@/core/proxy-utils';
 import QX_Producer from '@/core/proxy-utils/producers/qx';
 import { produceExternal, UUID } from './helpers';
+
+function captureWarns(fn) {
+    const originalWarn = $.warn;
+    const warnings = [];
+    $.warn = (message) => warnings.push(message);
+    try {
+        const result = fn();
+        return { result, warnings };
+    } finally {
+        $.warn = originalWarn;
+    }
+}
+
+function captureErrors(fn) {
+    const originalError = $.error;
+    const errors = [];
+    $.error = (message) => errors.push(message);
+    try {
+        const result = fn();
+        return { result, errors };
+    } finally {
+        $.error = originalError;
+    }
+}
 
 describe('Proxy text producers', function () {
     it('produces Quantumult X shadowsocks over-tls lines from canonical tls nodes', function () {
@@ -408,32 +433,6 @@ describe('Proxy text producers', function () {
         );
     });
 
-    it('produces Loon AnyTLS lines and keeps only supported fields', function () {
-        const output = produceExternal('Loon', {
-            type: 'anytls',
-            name: 'Loon AnyTLS',
-            server: 'anytls.example.com',
-            port: 443,
-            password: 'secret',
-            tls: true,
-            sni: 'sni.example.com',
-            network: 'ws',
-            'ws-opts': {
-                path: '/anytls',
-                headers: {
-                    Host: 'cdn.example.com',
-                },
-            },
-            'skip-cert-verify': true,
-            'idle-session-timeout': 30,
-            'max-stream-count': 16,
-        });
-
-        expect(output).to.equal(
-            'Loon AnyTLS=anytls,anytls.example.com,443,"secret",idle-session-timeout=30,max-stream-count=16,skip-cert-verify=true,tls-name=sni.example.com',
-        );
-    });
-
     it('produces Surge TUIC v5 lines with port hopping', function () {
         const output = produceExternal('Surge', {
             type: 'tuic',
@@ -452,6 +451,159 @@ describe('Proxy text producers', function () {
         expect(output).to.equal(
             `Surge TUIC=tuic-v5,tuic.example.com,443,uuid=${UUID},password="secret",alpn=h3,port-hopping="9000;9002-9004",sni="sni.example.com",skip-cert-verify=true,ecn=true`,
         );
+    });
+
+    it('produces Surge root headers for HTTP, HTTPS, HTTP/2 CONNECT, and TrustTunnel', function () {
+        const output = ProxyUtils.produce(
+            [
+                {
+                    type: 'http',
+                    name: 'Surge HTTP Headers',
+                    server: 'http.example.com',
+                    port: 8080,
+                    username: 'user',
+                    password: 'pass',
+                    headers: {
+                        'X-Client': 'Surge',
+                        'X-Token': 'abc',
+                    },
+                },
+                {
+                    type: 'http',
+                    name: 'Surge HTTPS Headers',
+                    server: 'https.example.com',
+                    port: 443,
+                    tls: true,
+                    sni: 'sni.example.com',
+                    headers: {
+                        'X-Padding': '<random-string(16)>',
+                    },
+                },
+                {
+                    type: 'h2-connect',
+                    name: 'Surge H2 Headers',
+                    server: 'h2.example.com',
+                    port: 443,
+                    tls: true,
+                    sni: 'sni.example.com',
+                    headers: {
+                        'X-Padding': '<random-string(16-32)>',
+                    },
+                },
+                {
+                    type: 'trusttunnel',
+                    name: 'Surge Trust Headers',
+                    server: 'trust.example.com',
+                    port: 443,
+                    username: 'user',
+                    password: 'pass',
+                    headers: {
+                        'X-Client': 'Surge',
+                    },
+                    sni: 'sni.example.com',
+                },
+            ],
+            'Surge',
+            'external',
+        );
+
+        expect(output.split('\n')).to.deep.equal([
+            'Surge HTTP Headers=http,http.example.com,8080,username="user",password="pass",headers="X-Client:"Surge";X-Token:"abc""',
+            'Surge HTTPS Headers=https,https.example.com,443,headers="X-Padding:"<random-string(16)>"",sni="sni.example.com"',
+            'Surge H2 Headers=h2-connect,h2.example.com,443,headers="X-Padding:"<random-string(16-32)>"",sni="sni.example.com"',
+            'Surge Trust Headers=trust-tunnel,trust.example.com,443,username="user",password="pass",headers="X-Client:"Surge"",sni="sni.example.com"',
+        ]);
+    });
+
+    it('round-trips Surge root headers with nested quotes and separators', function () {
+        const output = ProxyUtils.produce(
+            [
+                {
+                    type: 'http',
+                    name: 'Surge Nested Headers',
+                    server: 'nested.example.com',
+                    port: 443,
+                    tls: true,
+                    sni: 'sni.example.com',
+                    headers: {
+                        Host: 'nested.example.com',
+                        'X-Comma': 'a,b',
+                        'User-Agent': 'client/1.0 (Linux; U; Android 11)',
+                        'X-Quote': 'a",b',
+                        'X-Backslash': 'c\\d',
+                    },
+                },
+            ],
+            'Surge',
+            'external',
+        );
+
+        const [proxy] = ProxyUtils.parse(output);
+
+        expect(proxy.headers).to.deep.equal({
+            Host: 'nested.example.com',
+            'X-Comma': 'a,b',
+            'User-Agent': 'client/1.0 (Linux; U; Android 11)',
+            'X-Quote': 'a",b',
+            'X-Backslash': 'c\\d',
+        });
+        expect(output).to.include(String.raw`X-Quote:"a\",b"`);
+        expect(output).to.include(String.raw`X-Backslash:"c\\d"`);
+        expect(proxy.sni).to.equal('sni.example.com');
+    });
+
+    it('filters root proxy headers for unsupported text targets with an error log', function () {
+        const { result, errors } = captureErrors(() =>
+            ProxyUtils.produce(
+                [
+                    {
+                        type: 'http',
+                        name: 'QX HTTPS Headers',
+                        server: 'https.example.com',
+                        port: 443,
+                        tls: true,
+                        headers: {
+                            'X-Token': 'abc',
+                        },
+                    },
+                ],
+                'QX',
+                'external',
+            ),
+        );
+
+        expect(result).to.equal('');
+        expect(errors).to.have.length(1);
+        expect(errors[0]).to.include(
+            'Target platform QX does not support headers for HTTPS proxy QX HTTPS Headers',
+        );
+    });
+
+    it('keeps root proxy headers for unsupported text targets when include-unsupported-proxy is enabled', function () {
+        const { result, errors } = captureErrors(() =>
+            ProxyUtils.produce(
+                [
+                    {
+                        type: 'http',
+                        name: 'QX HTTPS Headers',
+                        server: 'https.example.com',
+                        port: 443,
+                        tls: true,
+                        headers: {
+                            'X-Token': 'abc',
+                        },
+                    },
+                ],
+                'QX',
+                'external',
+                { 'include-unsupported-proxy': true },
+            ),
+        );
+
+        expect(result).to.equal(
+            'http=https.example.com:443,over-tls=true,tag=QX HTTPS Headers',
+        );
+        expect(errors).to.have.length(0);
     });
 
     it('produces Loon WireGuard lines without leaking CIDR metadata fields', function () {
@@ -610,6 +762,27 @@ describe('Proxy text producers', function () {
         expect(output).to.include('udp-relay=true');
     });
 
+    it('does not wrap malformed SurgeMac nodes with Mihomo external mode', function () {
+        const output = ProxyUtils.produce(
+            [
+                {
+                    type: 'ss',
+                    name: 'Broken Obfs',
+                    server: 'ss.example.com',
+                    port: 8388,
+                    cipher: 'aes-128-gcm',
+                    password: 'secret',
+                    plugin: 'obfs',
+                },
+            ],
+            'SurgeMac',
+            'external',
+            { useMihomoExternal: true, localPort: 16666 },
+        );
+
+        expect(output).to.equal('');
+    });
+
     it('forces SurgeMac nodes with _mihomoExternal to use Mihomo external mode', function () {
         const output = produceExternal(
             'SurgeMac',
@@ -699,6 +872,153 @@ describe('Proxy text producers', function () {
                 'aes-128-gcm:secret',
             )}@ss.example.com:443/?plugin=${plugin}#SS%20V2ray%20Flags`,
         );
+    });
+
+    it('produces URI shadowsocks httpupgrade links with early data metadata', function () {
+        const output = produceExternal('URI', {
+            type: 'ss',
+            name: 'SS Upgrade',
+            server: 'ss-upgrade.example.com',
+            port: 443,
+            cipher: 'aes-128-gcm',
+            password: 'secret',
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade?a=1&b=2',
+                headers: {
+                    Host: 'upgrade.example.com',
+                },
+                'v2ray-http-upgrade': true,
+                'v2ray-http-upgrade-fast-open': true,
+                '_v2ray-http-upgrade-ed': '1024',
+            },
+        });
+
+        expect(output).to.equal(
+            `ss://${Base64.encode(
+                'aes-128-gcm:secret',
+            )}@ss-upgrade.example.com:443?sni=ss-upgrade.example.com&type=httpupgrade&path=%2Fupgrade%3Fa%3D1%26b%3D2%26ed%3D1024&host=upgrade.example.com&security=tls#SS%20Upgrade`,
+        );
+
+        const reparsed = ProxyUtils.parse(output)[0];
+        expect(reparsed['ws-opts'].path).to.equal('/upgrade?a=1&b=2');
+        expect(reparsed['ws-opts']['v2ray-http-upgrade-fast-open']).to.equal(
+            true,
+        );
+        expect(reparsed['ws-opts']['_v2ray-http-upgrade-ed']).to.equal('1024');
+        expect(reparsed['ws-opts']).to.not.have.property('max-early-data');
+        expect(reparsed['ws-opts']).to.not.have.property(
+            'early-data-header-name',
+        );
+    });
+
+    it('produces URI shadowsocks websocket links with early data metadata', function () {
+        const output = produceExternal('URI', {
+            type: 'ss',
+            name: 'SS WS Early',
+            server: 'ss-ws.example.com',
+            port: 443,
+            cipher: 'aes-128-gcm',
+            password: 'secret',
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws?a=1&b=2',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'max-early-data': 2048,
+                'early-data-header-name': 'Sec-WebSocket-Protocol',
+            },
+        });
+
+        expect(output).to.equal(
+            `ss://${Base64.encode(
+                'aes-128-gcm:secret',
+            )}@ss-ws.example.com:443?sni=ss-ws.example.com&type=ws&path=%2Fws%3Fa%3D1%26b%3D2%26ed%3D2048&host=cdn.example.com&security=tls#SS%20WS%20Early`,
+        );
+
+        const reparsed = ProxyUtils.parse(output)[0];
+        expect(reparsed['ws-opts'].path).to.equal('/ws?a=1&b=2');
+        expect(reparsed['ws-opts']['max-early-data']).to.equal(2048);
+        expect(reparsed['ws-opts']['early-data-header-name']).to.equal(
+            'Sec-WebSocket-Protocol',
+        );
+        expect(reparsed['ws-opts']).to.not.have.property('v2ray-http-upgrade');
+    });
+
+    it('does not serialize URI websocket early data for formats without custom header support', function () {
+        const proxies = [
+            {
+                type: 'ss',
+                name: 'SS WS Custom Early',
+                server: 'ss-ws.example.com',
+                port: 443,
+                cipher: 'aes-128-gcm',
+                password: 'secret',
+                tls: true,
+                network: 'ws',
+                'ws-opts': {
+                    path: '/ws?a=1&ed=1024&b=2',
+                    headers: {
+                        Host: 'cdn.example.com',
+                    },
+                    'max-early-data': 2048,
+                    'early-data-header-name': 'X-Data',
+                },
+            },
+            {
+                type: 'vmess',
+                name: 'VMess WS Custom Early',
+                server: 'vmess-ws.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                alterId: 0,
+                tls: true,
+                network: 'ws',
+                'ws-opts': {
+                    path: '/ws?a=1&ed=1024&b=2',
+                    headers: {
+                        Host: 'cdn.example.com',
+                    },
+                    'max-early-data': 2048,
+                    'early-data-header-name': 'X-Data',
+                },
+            },
+            {
+                type: 'trojan',
+                name: 'Trojan WS Custom Early',
+                server: 'trojan-ws.example.com',
+                port: 443,
+                password: 'secret',
+                tls: true,
+                network: 'ws',
+                'ws-opts': {
+                    path: '/ws?a=1&ed=1024&b=2',
+                    headers: {
+                        Host: 'cdn.example.com',
+                    },
+                    'max-early-data': 2048,
+                    'early-data-header-name': 'X-Data',
+                },
+            },
+        ];
+
+        for (const proxy of proxies) {
+            const reparsed = ProxyUtils.parse(produceExternal('URI', proxy))[0];
+
+            expect(reparsed['ws-opts'].path, proxy.type).to.equal(
+                '/ws?a=1&b=2',
+            );
+            expect(reparsed['ws-opts'], proxy.type).to.not.have.property(
+                'max-early-data',
+            );
+            expect(reparsed['ws-opts'], proxy.type).to.not.have.property(
+                'early-data-header-name',
+            );
+        }
     });
 
     it('normalizes boolean v2ray-plugin mux values to integers in URI links', function () {
@@ -905,6 +1225,34 @@ describe('Proxy text producers', function () {
         );
     });
 
+    it('replaces stale URI VLESS websocket path early data with max-early-data', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI WS Conflict',
+            server: 'vless.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws?a=1&ed=999&b=2',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'max-early-data': 2048,
+                'early-data-header-name': 'Sec-WebSocket-Protocol',
+            },
+        });
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless.example.com:443?security=tls&type=ws&path=%2Fws%3Fa%3D1%26b%3D2&host=cdn.example.com&ed=2048#URI%20WS%20Conflict`,
+        );
+
+        const reparsed = ProxyUtils.parse(output)[0];
+        expect(reparsed['ws-opts'].path).to.equal('/ws?a=1&b=2');
+        expect(reparsed['ws-opts']['max-early-data']).to.equal(2048);
+    });
+
     it('produces URI VLESS websocket links with pcs from tls fingerprint', function () {
         const output = produceExternal('URI', {
             type: 'vless',
@@ -927,6 +1275,149 @@ describe('Proxy text producers', function () {
         expect(output).to.equal(
             `vless://${UUID}@vless.example.com:443?security=tls&type=ws&path=%2Fws&host=cdn.example.com&pcs=fingerprint&sni=sni.example.com#URI%20WS%20PCS`,
         );
+    });
+
+    it('produces URI VLESS links with ech from mihomo ech opts config', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI WS ECH',
+            server: 'vless.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            _echConfigList: 'STALE',
+            'ech-opts': {
+                enable: true,
+                config: 'ECHCONFIG',
+            },
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+            },
+        });
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless.example.com:443?security=tls&type=ws&path=%2Fws&host=cdn.example.com&ech=ECHCONFIG&sni=sni.example.com#URI%20WS%20ECH`,
+        );
+    });
+
+    it('matches mihomo ECH enable decoding when producing URI VLESS links', function () {
+        const baseProxy = {
+            type: 'vless',
+            server: 'vless.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            _echConfigList: 'FALLBACK',
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+            },
+        };
+        const outputWithNumericEnable = produceExternal('URI', {
+            ...baseProxy,
+            name: 'URI WS ECH Numeric',
+            'ech-opts': {
+                enable: 1,
+                config: 'ECHCONFIG',
+            },
+        });
+        const outputWithoutEnable = produceExternal('URI', {
+            ...baseProxy,
+            name: 'URI WS ECH Missing Enable',
+            'ech-opts': {
+                config: 'ECHCONFIG',
+            },
+        });
+        const outputWithStringEnable = produceExternal('URI', {
+            ...baseProxy,
+            name: 'URI WS ECH String Enable',
+            'ech-opts': {
+                enable: 'true',
+                config: 'ECHCONFIG',
+            },
+        });
+
+        expect(outputWithNumericEnable).to.equal(
+            `vless://${UUID}@vless.example.com:443?security=tls&type=ws&path=%2Fws&host=cdn.example.com&ech=ECHCONFIG&sni=sni.example.com#URI%20WS%20ECH%20Numeric`,
+        );
+        expect(outputWithoutEnable).to.not.include('&ech=');
+        expect(outputWithStringEnable).to.not.include('&ech=');
+    });
+
+    it('produces URI VLESS links with ech DNS from mihomo sidecar fields', function () {
+        const echConfigList = 'ech.example.com+https://1.1.1.1/dns-query';
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI WS ECH DNS',
+            server: 'vless.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            'ech-opts': {
+                enable: true,
+                _dns: 'https://1.1.1.1/dns-query',
+                'query-server-name': 'ech.example.com',
+            },
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+            },
+        });
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless.example.com:443?security=tls&type=ws&path=%2Fws&host=cdn.example.com&ech=${encodeURIComponent(
+                echConfigList,
+            )}&sni=sni.example.com#URI%20WS%20ECH%20DNS`,
+        );
+    });
+
+    it('uses default ECH DNS and warns when URI VLESS ech opts only set query server name', function () {
+        const echConfigList =
+            'ech.example.com+https://dns.alidns.com/dns-query';
+        const { result: output, warnings } = captureWarns(() =>
+            produceExternal('URI', {
+                type: 'vless',
+                name: 'URI WS ECH Default DNS',
+                server: 'vless.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                sni: 'sni.example.com',
+                'ech-opts': {
+                    enable: true,
+                    'query-server-name': 'ech.example.com',
+                },
+                network: 'ws',
+                'ws-opts': {
+                    path: '/ws',
+                    headers: {
+                        Host: 'cdn.example.com',
+                    },
+                },
+            }),
+        );
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless.example.com:443?security=tls&type=ws&path=%2Fws&host=cdn.example.com&ech=${encodeURIComponent(
+                echConfigList,
+            )}&sni=sni.example.com#URI%20WS%20ECH%20Default%20DNS`,
+        );
+        expect(warnings).to.have.length(1);
+        expect(warnings[0]).to.include('https://dns.alidns.com/dns-query');
+        expect(warnings[0]).to.include('ech-opts._dns');
     });
 
     it('produces URI VLESS fake-http links with method and headerType', function () {
@@ -968,13 +1459,256 @@ describe('Proxy text producers', function () {
                 },
                 'v2ray-http-upgrade': true,
                 'v2ray-http-upgrade-fast-open': true,
-                'max-early-data': 1024,
+                '_v2ray-http-upgrade-ed': '1024',
                 'early-data-header-name': 'X-Upgrade',
             },
         });
 
         expect(output).to.equal(
-            `vless://${UUID}@vless-upgrade.example.com:443?security=tls&type=httpupgrade&path=%2Fupgrade&host=upgrade.example.com&ed=1024&eh=X-Upgrade#URI%20Upgrade`,
+            `vless://${UUID}@vless-upgrade.example.com:443?security=tls&type=httpupgrade&path=%2Fupgrade%3Fed%3D1024&host=upgrade.example.com&eh=X-Upgrade#URI%20Upgrade`,
+        );
+    });
+
+    it('defaults URI VLESS httpupgrade path early data without reusing websocket early data', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI Upgrade Default',
+            server: 'vless-upgrade.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade',
+                headers: {
+                    Host: 'upgrade.example.com',
+                },
+                'v2ray-http-upgrade': true,
+                'v2ray-http-upgrade-fast-open': true,
+                'max-early-data': 1024,
+            },
+        });
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless-upgrade.example.com:443?security=tls&type=httpupgrade&path=%2Fupgrade%3Fed%3D2560&host=upgrade.example.com#URI%20Upgrade%20Default`,
+        );
+    });
+
+    it('keeps URI VLESS httpupgrade early data from path when metadata is absent', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI Upgrade Existing Path Early',
+            server: 'vless-upgrade.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade?a=1&ed=1024&b=2',
+                headers: {
+                    Host: 'upgrade.example.com',
+                },
+                'v2ray-http-upgrade': true,
+                'v2ray-http-upgrade-fast-open': true,
+            },
+        });
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless-upgrade.example.com:443?security=tls&type=httpupgrade&path=%2Fupgrade%3Fa%3D1%26b%3D2%26ed%3D1024&host=upgrade.example.com#URI%20Upgrade%20Existing%20Path%20Early`,
+        );
+    });
+
+    it('adds URI VLESS httpupgrade early data to paths with existing query params', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI Upgrade Query',
+            server: 'vless-upgrade.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade?a=1&b=2',
+                headers: {
+                    Host: 'upgrade.example.com',
+                },
+                'v2ray-http-upgrade': true,
+                'v2ray-http-upgrade-fast-open': true,
+                '_v2ray-http-upgrade-ed': '1024',
+            },
+        });
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless-upgrade.example.com:443?security=tls&type=httpupgrade&path=%2Fupgrade%3Fa%3D1%26b%3D2%26ed%3D1024&host=upgrade.example.com#URI%20Upgrade%20Query`,
+        );
+    });
+
+    it('replaces invalid URI VLESS httpupgrade path early data', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI Upgrade Invalid Query',
+            server: 'vless-upgrade.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade?ed=abc&x=1',
+                headers: {
+                    Host: 'upgrade.example.com',
+                },
+                'v2ray-http-upgrade': true,
+                'v2ray-http-upgrade-fast-open': true,
+                '_v2ray-http-upgrade-ed': '1024',
+            },
+        });
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless-upgrade.example.com:443?security=tls&type=httpupgrade&path=%2Fupgrade%3Fx%3D1%26ed%3D1024&host=upgrade.example.com#URI%20Upgrade%20Invalid%20Query`,
+        );
+    });
+
+    it('does not serialize invalid URI early data values', function () {
+        const invalidVlessWsOutput = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI WS Invalid Early',
+            server: 'vless.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws?a=1&ed=1024&b=2',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'max-early-data': '999999999999999999999',
+                'early-data-header-name': 'Sec-WebSocket-Protocol',
+            },
+        });
+        const invalidSsWsOutput = produceExternal('URI', {
+            type: 'ss',
+            name: 'SS WS Invalid Early',
+            server: 'ss-ws.example.com',
+            port: 443,
+            cipher: 'aes-128-gcm',
+            password: 'secret',
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws?a=1&ed=1024&b=2',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'max-early-data': 'abc',
+                'early-data-header-name': 'Sec-WebSocket-Protocol',
+            },
+        });
+        const invalidHttpUpgradeOutput = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI Upgrade Invalid Metadata',
+            server: 'vless-upgrade.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade?ed=abc',
+                headers: {
+                    Host: 'upgrade.example.com',
+                },
+                'v2ray-http-upgrade': true,
+                'v2ray-http-upgrade-fast-open': true,
+                '_v2ray-http-upgrade-ed': 'abc',
+            },
+        });
+
+        const reparsedVlessWs = ProxyUtils.parse(invalidVlessWsOutput)[0];
+        const reparsedSsWs = ProxyUtils.parse(invalidSsWsOutput)[0];
+
+        expect(reparsedVlessWs['ws-opts'].path).to.equal('/ws?a=1&b=2');
+        expect(reparsedVlessWs['ws-opts']).to.not.have.property(
+            'max-early-data',
+        );
+        expect(reparsedSsWs['ws-opts'].path).to.equal('/ws?a=1&b=2');
+        expect(reparsedSsWs['ws-opts']).to.not.have.property('max-early-data');
+        expect(invalidHttpUpgradeOutput).to.equal(
+            `vless://${UUID}@vless-upgrade.example.com:443?security=tls&type=httpupgrade&path=%2Fupgrade%3Fed%3D2560&host=upgrade.example.com#URI%20Upgrade%20Invalid%20Metadata`,
+        );
+    });
+
+    it('produces URI VMess httpupgrade links with early data metadata', function () {
+        const output = produceExternal('URI', {
+            type: 'vmess',
+            name: 'URI VMess Upgrade',
+            server: 'vmess-upgrade.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'auto',
+            alterId: 0,
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade?a=1&b=2',
+                headers: {
+                    Host: 'upgrade.example.com',
+                },
+                'v2ray-http-upgrade': true,
+                'v2ray-http-upgrade-fast-open': true,
+                '_v2ray-http-upgrade-ed': '1024',
+            },
+        });
+        const payload = JSON.parse(
+            Base64.decode(output.replace(/^vmess:\/\//, '')),
+        );
+
+        expect(payload.net).to.equal('httpupgrade');
+        expect(payload.path).to.equal('/upgrade?a=1&b=2&ed=1024');
+
+        const reparsed = ProxyUtils.parse(output)[0];
+        expect(reparsed['ws-opts'].path).to.equal('/upgrade?a=1&b=2');
+        expect(reparsed['ws-opts']['v2ray-http-upgrade-fast-open']).to.equal(
+            true,
+        );
+        expect(reparsed['ws-opts']['_v2ray-http-upgrade-ed']).to.equal('1024');
+        expect(reparsed['ws-opts']).to.not.have.property('max-early-data');
+        expect(reparsed['ws-opts']).to.not.have.property(
+            'early-data-header-name',
+        );
+    });
+
+    it('produces URI VMess websocket links with early data metadata', function () {
+        const output = produceExternal('URI', {
+            type: 'vmess',
+            name: 'URI VMess WS Early',
+            server: 'vmess-ws.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'auto',
+            alterId: 0,
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws?a=1&b=2',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'max-early-data': 2048,
+                'early-data-header-name': 'Sec-WebSocket-Protocol',
+            },
+        });
+        const payload = JSON.parse(
+            Base64.decode(output.replace(/^vmess:\/\//, '')),
+        );
+
+        expect(payload.net).to.equal('ws');
+        expect(payload.path).to.equal('/ws?a=1&b=2&ed=2048');
+
+        const reparsed = ProxyUtils.parse(output)[0];
+        expect(reparsed['ws-opts'].path).to.equal('/ws?a=1&b=2');
+        expect(reparsed['ws-opts']['max-early-data']).to.equal(2048);
+        expect(reparsed['ws-opts']['early-data-header-name']).to.equal(
+            'Sec-WebSocket-Protocol',
         );
     });
 
@@ -1339,7 +2073,9 @@ describe('Proxy text producers', function () {
         expect(extra.xmux).to.deep.equal({
             hKeepAlivePeriod: '9007199254740993',
         });
-        expect(extra.downloadSettings?.address).to.equal('download.example.com');
+        expect(extra.downloadSettings?.address).to.equal(
+            'download.example.com',
+        );
         expect(extra.downloadSettings?.port).to.equal(8443);
         expect(extra.downloadSettings?.network).to.equal('xhttp');
         expect(extra.downloadSettings?.security).to.equal('tls');
@@ -1400,6 +2136,11 @@ describe('Proxy text producers', function () {
         const extra = JSON.parse(decodeURIComponent(encodedExtra));
         expect(extra.downloadSettings).to.deep.equal({
             network: 'xhttp',
+            xhttpSettings: {
+                path: '/xhttp',
+                host: 'cdn.example.com',
+                mode: 'stream-up',
+            },
             sockopt: {
                 mark: 255,
             },
@@ -1407,11 +2148,12 @@ describe('Proxy text producers', function () {
 
         const reparsed = ProxyUtils.parse(output);
         expect(reparsed, output).to.have.length(1);
-        expect(reparsed[0]['xhttp-opts']?.['download-settings']).to.deep.equal(
-            {
-                network: 'xhttp',
-            },
-        );
+        expect(reparsed[0]['xhttp-opts']?.['download-settings']).to.deep.equal({
+            network: 'xhttp',
+            path: '/xhttp',
+            host: 'cdn.example.com',
+            mode: 'stream-up',
+        });
         expect(reparsed[0]._extra_unsupported).to.deep.equal({
             downloadSettings: {
                 sockopt: {
@@ -1525,12 +2267,12 @@ describe('Proxy text producers', function () {
             maxConcurrency: '8-16',
             hKeepAlivePeriod: 15,
         });
-        expect(extra.downloadSettings?.xhttpSettings?.extra?.xmux).to.deep.equal(
-            {
-                hMaxRequestTimes: '4-8',
-                hKeepAlivePeriod: -1,
-            },
-        );
+        expect(
+            extra.downloadSettings?.xhttpSettings?.extra?.xmux,
+        ).to.deep.equal({
+            hMaxRequestTimes: '4-8',
+            hKeepAlivePeriod: -1,
+        });
 
         const reparsed = ProxyUtils.parse(output);
         expect(reparsed, output).to.have.length(1);
@@ -1636,6 +2378,7 @@ describe('Proxy text producers', function () {
                 xhttpSettings: {
                     path: '/download',
                     host: 'download-host.example.com',
+                    mode: 'stream-up',
                     headers: {
                         'X-Download': '1',
                     },
@@ -1781,6 +2524,7 @@ describe('Proxy text producers', function () {
                 xhttpSettings: {
                     path: '/download',
                     host: 'download-host.example.com',
+                    mode: 'stream-up',
                     scMaxEachPostBytes: 1000000,
                     scMinPostsIntervalMs: '0-300',
                 },
@@ -1853,6 +2597,7 @@ describe('Proxy text producers', function () {
                 xhttpSettings: {
                     path: '/download',
                     host: 'download-host.example.com',
+                    mode: 'stream-up',
                     scMaxEachPostBytes: 1000000,
                     scMinPostsIntervalMs: '0-300',
                 },
@@ -1933,6 +2678,7 @@ describe('Proxy text producers', function () {
                 xhttpSettings: {
                     path: '/download',
                     host: 'download-host.example.com',
+                    mode: 'stream-up',
                     noGRPCHeader: true,
                     xPaddingBytes: '32-64',
                     scMaxEachPostBytes: 1000000,
@@ -2138,6 +2884,193 @@ describe('Proxy text producers', function () {
         });
     });
 
+    it('produces nested xhttp download TLS ECH DNS fields from mihomo sidecar fields', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI XHTTP Nested ECH DNS',
+            server: 'vless-xhttp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            network: 'xhttp',
+            'xhttp-opts': {
+                path: '/xhttp',
+                mode: 'stream-up',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'download-settings': {
+                    server: 'download.example.com',
+                    port: 8443,
+                    tls: true,
+                    'ech-opts': {
+                        enable: true,
+                        _dns: 'https://1.1.1.1/dns-query',
+                        'query-server-name': 'download-ech.example.com',
+                        '_force-query': 'full',
+                        _sockopt: {
+                            mark: 255,
+                        },
+                    },
+                    path: '/download',
+                    host: 'download-host.example.com',
+                },
+            },
+        });
+
+        const [, encodedExtra] = output.match(/[?&]extra=([^#]+)/);
+        const extra = JSON.parse(decodeURIComponent(encodedExtra));
+        expect(extra.downloadSettings?.tlsSettings).to.deep.equal({
+            echConfigList: 'download-ech.example.com+https://1.1.1.1/dns-query',
+            echForceQuery: 'full',
+            echSockopt: {
+                mark: 255,
+            },
+        });
+
+        const reparsed = ProxyUtils.parse(output);
+        expect(reparsed, output).to.have.length(1);
+        expect(
+            reparsed[0]['xhttp-opts']?.['download-settings']?.['ech-opts'],
+        ).to.deep.equal({
+            enable: true,
+            _dns: 'https://1.1.1.1/dns-query',
+            'query-server-name': 'download-ech.example.com',
+            '_force-query': 'full',
+            _sockopt: {
+                mark: 255,
+            },
+        });
+    });
+
+    it('uses default ECH DNS and warns for nested xhttp download ECH query server name without DNS', function () {
+        const { result: output, warnings } = captureWarns(() =>
+            produceExternal('URI', {
+                type: 'vless',
+                name: 'URI XHTTP Nested ECH Default DNS',
+                server: 'vless-xhttp.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                sni: 'sni.example.com',
+                network: 'xhttp',
+                'xhttp-opts': {
+                    path: '/xhttp',
+                    mode: 'stream-up',
+                    headers: {
+                        Host: 'cdn.example.com',
+                    },
+                    'download-settings': {
+                        server: 'download.example.com',
+                        port: 8443,
+                        tls: true,
+                        'ech-opts': {
+                            enable: true,
+                            'query-server-name': 'download-ech.example.com',
+                            '_force-query': 'half',
+                        },
+                        path: '/download',
+                    },
+                },
+            }),
+        );
+
+        const [, encodedExtra] = output.match(/[?&]extra=([^#]+)/);
+        const extra = JSON.parse(decodeURIComponent(encodedExtra));
+        expect(extra.downloadSettings?.tlsSettings).to.deep.equal({
+            echConfigList:
+                'download-ech.example.com+https://dns.alidns.com/dns-query',
+            echForceQuery: 'half',
+        });
+        expect(warnings).to.have.length(1);
+        expect(warnings[0]).to.include('https://dns.alidns.com/dns-query');
+        expect(warnings[0]).to.include(
+            'xhttp-opts.download-settings.ech-opts._dns',
+        );
+    });
+
+    it('omits nested xhttp download TLS ECH extras without an ECH config list', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI XHTTP Nested ECH Sidecar Only',
+            server: 'vless-xhttp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            network: 'xhttp',
+            'xhttp-opts': {
+                path: '/xhttp',
+                mode: 'stream-up',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'download-settings': {
+                    server: 'download.example.com',
+                    port: 8443,
+                    tls: true,
+                    'ech-opts': {
+                        enable: true,
+                        '_force-query': 'full',
+                        _sockopt: {
+                            mark: 255,
+                        },
+                    },
+                    path: '/download',
+                },
+            },
+        });
+
+        const [, encodedExtra] = output.match(/[?&]extra=([^#]+)/);
+        const extra = JSON.parse(decodeURIComponent(encodedExtra));
+        expect(extra.downloadSettings?.security).to.equal('tls');
+        expect(extra.downloadSettings).to.not.have.property('tlsSettings');
+    });
+
+    it('drops unsupported nested xhttp download TLS ECH force query values', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI XHTTP Nested ECH Invalid Force Query',
+            server: 'vless-xhttp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            network: 'xhttp',
+            'xhttp-opts': {
+                path: '/xhttp',
+                mode: 'stream-up',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'download-settings': {
+                    server: 'download.example.com',
+                    port: 8443,
+                    tls: true,
+                    'ech-opts': {
+                        enable: true,
+                        _dns: 'https://1.1.1.1/dns-query',
+                        '_force-query': 'invalid',
+                        _sockopt: {
+                            mark: 255,
+                        },
+                    },
+                    path: '/download',
+                },
+            },
+        });
+
+        const [, encodedExtra] = output.match(/[?&]extra=([^#]+)/);
+        const extra = JSON.parse(decodeURIComponent(encodedExtra));
+        expect(extra.downloadSettings?.tlsSettings).to.deep.equal({
+            echConfigList: 'https://1.1.1.1/dns-query',
+            echSockopt: {
+                mark: 255,
+            },
+        });
+    });
+
     it('skips URI VLESS exports when nested reality download settings are missing public keys', function () {
         const rawExtra = JSON.stringify({
             downloadSettings: {
@@ -2266,9 +3199,9 @@ describe('Proxy text producers', function () {
 
         const reparsed = ProxyUtils.parse(output);
         expect(reparsed, output).to.have.length(1);
-        expect(
-            reparsed[0]['xhttp-opts']?.['download-settings']?.host,
-        ).to.equal('download-host.example.com');
+        expect(reparsed[0]['xhttp-opts']?.['download-settings']?.host).to.equal(
+            'download-host.example.com',
+        );
         expect(
             reparsed[0]['xhttp-opts']?.['download-settings']?.headers,
         ).to.deep.equal({
@@ -2317,9 +3250,9 @@ describe('Proxy text producers', function () {
 
         const reparsed = ProxyUtils.parse(output);
         expect(reparsed, output).to.have.length(1);
-        expect(
-            reparsed[0]['xhttp-opts']?.['download-settings']?.host,
-        ).to.equal('download-host.example.com');
+        expect(reparsed[0]['xhttp-opts']?.['download-settings']?.host).to.equal(
+            'download-host.example.com',
+        );
         expect(
             reparsed[0]['xhttp-opts']?.['download-settings']?.headers,
         ).to.deep.equal({
@@ -2344,6 +3277,7 @@ describe('Proxy text producers', function () {
                 xhttpSettings: {
                     path: '/download',
                     host: 'download-host.example.com',
+                    mode: 'stream-up',
                     scMaxEachPostBytes: 1000000,
                     scMinPostsIntervalMs: '0-300',
                     extra: {
@@ -2451,6 +3385,8 @@ describe('Proxy text producers', function () {
             security: 'tls',
             xhttpSettings: {
                 path: '/download',
+                host: 'cdn.example.com',
+                mode: 'stream-up',
             },
         });
 
@@ -2464,6 +3400,8 @@ describe('Proxy text producers', function () {
             network: 'xhttp',
             tls: true,
             path: '/download',
+            host: 'cdn.example.com',
+            mode: 'stream-up',
         });
     });
 
@@ -2482,6 +3420,7 @@ describe('Proxy text producers', function () {
                 xhttpSettings: {
                     path: '/download',
                     host: 'download-host.example.com',
+                    mode: 'stream-up',
                     noGRPCHeader: true,
                     xPaddingBytes: '32-64',
                     extra: {
@@ -2596,6 +3535,11 @@ describe('Proxy text producers', function () {
                 network: 'xhttp',
                 port: 8443,
                 security: 'tls',
+                xhttpSettings: {
+                    path: '/xhttp',
+                    host: 'cdn.example.com',
+                    mode: 'stream-up',
+                },
             },
         });
         const output = produceExternal('URI', {
@@ -2638,12 +3582,12 @@ describe('Proxy text producers', function () {
         expect(
             reparsed[0]['xhttp-opts']?.['download-settings'],
         ).to.not.have.property('sc-min-posts-interval-ms');
-        expect(
-            reparsed[0]['xhttp-opts']?.['download-settings'],
-        ).to.not.have.property('path');
-        expect(
-            reparsed[0]['xhttp-opts']?.['download-settings'],
-        ).to.not.have.property('host');
+        expect(reparsed[0]['xhttp-opts']?.['download-settings']?.path).to.equal(
+            '/xhttp',
+        );
+        expect(reparsed[0]['xhttp-opts']?.['download-settings']?.host).to.equal(
+            'cdn.example.com',
+        );
     });
 
     it('produces URI Trojan websocket links with pcs from tls fingerprint', function () {
@@ -2667,6 +3611,73 @@ describe('Proxy text producers', function () {
 
         expect(output).to.equal(
             'trojan://secret@trojan.example.com:443?sni=sni.example.com&type=ws&path=%2Fws&host=cdn.example.com&pcs=fingerprint#URI%20Trojan%20PCS',
+        );
+    });
+
+    it('produces URI Trojan websocket links with early data metadata', function () {
+        const output = produceExternal('URI', {
+            type: 'trojan',
+            name: 'URI Trojan WS Early',
+            server: 'trojan.example.com',
+            port: 443,
+            password: 'secret',
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws?a=1&b=2',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'max-early-data': 2048,
+                'early-data-header-name': 'Sec-WebSocket-Protocol',
+            },
+        });
+
+        expect(output).to.equal(
+            'trojan://secret@trojan.example.com:443?sni=trojan.example.com&type=ws&path=%2Fws%3Fa%3D1%26b%3D2%26ed%3D2048&host=cdn.example.com#URI%20Trojan%20WS%20Early',
+        );
+
+        const reparsed = ProxyUtils.parse(output)[0];
+        expect(reparsed['ws-opts'].path).to.equal('/ws?a=1&b=2');
+        expect(reparsed['ws-opts']['max-early-data']).to.equal(2048);
+        expect(reparsed['ws-opts']['early-data-header-name']).to.equal(
+            'Sec-WebSocket-Protocol',
+        );
+    });
+
+    it('produces URI Trojan httpupgrade links with early data metadata', function () {
+        const output = produceExternal('URI', {
+            type: 'trojan',
+            name: 'URI Trojan Upgrade',
+            server: 'trojan-upgrade.example.com',
+            port: 443,
+            password: 'secret',
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade?a=1&b=2',
+                headers: {
+                    Host: 'upgrade.example.com',
+                },
+                'v2ray-http-upgrade': true,
+                'v2ray-http-upgrade-fast-open': true,
+                '_v2ray-http-upgrade-ed': '1024',
+            },
+        });
+
+        expect(output).to.equal(
+            'trojan://secret@trojan-upgrade.example.com:443?sni=trojan-upgrade.example.com&type=httpupgrade&path=%2Fupgrade%3Fa%3D1%26b%3D2%26ed%3D1024&host=upgrade.example.com#URI%20Trojan%20Upgrade',
+        );
+
+        const reparsed = ProxyUtils.parse(output)[0];
+        expect(reparsed['ws-opts'].path).to.equal('/upgrade?a=1&b=2');
+        expect(reparsed['ws-opts']['v2ray-http-upgrade-fast-open']).to.equal(
+            true,
+        );
+        expect(reparsed['ws-opts']['_v2ray-http-upgrade-ed']).to.equal('1024');
+        expect(reparsed['ws-opts']).to.not.have.property('max-early-data');
+        expect(reparsed['ws-opts']).to.not.have.property(
+            'early-data-header-name',
         );
     });
 

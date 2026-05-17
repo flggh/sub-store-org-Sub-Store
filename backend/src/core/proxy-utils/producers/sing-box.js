@@ -2,6 +2,10 @@ import ClashMeta_Producer from './clashmeta';
 import $ from '@/core/app';
 import { isPlainObject } from '@/utils';
 import { getWireGuardAddressWithCIDR, normalizePluginMuxValue } from './utils';
+import {
+    extractPathQueryParam,
+    getSafeIntegerPathQueryParam,
+} from '../transport-path';
 
 const ipVersions = {
     ipv4: 'ipv4_only',
@@ -31,12 +35,28 @@ const domainResolverParser = (proxy, parsedProxy) => {
         };
     }
 };
+const hasControlHTTPClient = (proxy) => {
+    const value = proxy['control-http-client'];
+    if (value === undefined || value === null) return false;
+    if (typeof value === 'string') return value.trim() !== '';
+    if (isPlainObject(value)) {
+        return Object.values(value).some(
+            (item) => item !== undefined && item !== null && item !== '',
+        );
+    }
+    return true;
+};
 const detourParser = (proxy, parsedProxy) => {
     parsedProxy.detour = proxy['dialer-proxy'] || proxy.detour;
 };
 const networkParser = (proxy, parsedProxy) => {
-    if (['tcp', 'udp'].includes(proxy._network))
+    if (['tcp', 'udp'].includes(proxy._network)) {
         parsedProxy.network = proxy._network;
+        return;
+    }
+    if (proxy.udp === false) {
+        parsedProxy.network = 'tcp';
+    }
 };
 const tfoParser = (proxy, parsedProxy) => {
     parsedProxy.tcp_fast_open = false;
@@ -134,13 +154,12 @@ const wsParser = (proxy, parsedProxy) => {
     if (proxy['ws-path'] && proxy['ws-path'] !== '')
         transport.path = `${proxy['ws-path']}`;
     if (transport.path) {
-        const reg = /^(.*?)(?:\?ed=(\d+))?$/;
-        // eslint-disable-next-line no-unused-vars
-        const [_, path = '', ed = ''] = reg.exec(transport.path);
-        transport.path = path;
+        const { value: ed, parsed: maxEarlyData } =
+            getSafeIntegerPathQueryParam(transport.path, 'ed');
         if (ed !== '') {
+            transport.path = extractPathQueryParam(transport.path, 'ed').path;
             transport.early_data_header_name = 'Sec-WebSocket-Protocol';
-            transport.max_early_data = parseInt(ed, 10);
+            transport.max_early_data = maxEarlyData;
         }
     }
 
@@ -504,6 +523,7 @@ const shadowTLSParser = (proxy = {}) => {
     if (proxy['fast-open'] === true) stPart.udp_fragment = true;
     tfoParser(proxy, stPart);
     detourParser(proxy, stPart);
+    networkParser(proxy, ssPart);
     smuxParser(proxy.smux, ssPart);
     ipVersionParser(proxy, stPart);
     domainResolverParser(proxy, stPart);
@@ -616,6 +636,7 @@ const ssrParser = (proxy = {}) => {
     if (proxy['protocol-param'] && proxy['protocol-param'] !== '')
         parsedProxy.protocol_param = proxy['protocol-param'];
     if (proxy['fast-open']) parsedProxy.udp_fragment = true;
+    networkParser(proxy, parsedProxy);
     tfoParser(proxy, parsedProxy);
     detourParser(proxy, parsedProxy);
     smuxParser(proxy.smux, parsedProxy);
@@ -937,11 +958,13 @@ const anytlsParser = (proxy = {}) => {
     return parsedProxy;
 };
 const tailscaleParser = (proxy = {}) => {
+    const useControlHTTPClient = hasControlHTTPClient(proxy);
     const parsedProxy = {
         tag: proxy.name,
         type: 'tailscale',
+        control_http_client: proxy['control-http-client'],
         udp_timeout: proxy['udp-timeout'],
-        state_directory: proxy['state-directory'],
+        state_directory: proxy['state-dir'] || proxy['state-directory'],
         auth_key: proxy['auth-key'],
         control_url: proxy['control-url'],
         ephemeral: proxy.ephemeral,
@@ -974,10 +997,11 @@ const tailscaleParser = (proxy = {}) => {
             `${proxy['relay-server-port']}`,
             10,
         );
-    networkParser(proxy, parsedProxy);
-    detourParser(proxy, parsedProxy);
-    ipVersionParser(proxy, parsedProxy);
-    domainResolverParser(proxy, parsedProxy);
+    if (!useControlHTTPClient) {
+        detourParser(proxy, parsedProxy);
+        ipVersionParser(proxy, parsedProxy);
+        domainResolverParser(proxy, parsedProxy);
+    }
     return parsedProxy;
 };
 
@@ -1064,7 +1088,6 @@ const wireguardParser = (proxy = {}) => {
             parsedProxy.peers.push(peer);
         }
     }
-    networkParser(proxy, parsedProxy);
     tfoParser(proxy, parsedProxy);
     detourParser(proxy, parsedProxy);
     smuxParser(proxy.smux, parsedProxy);

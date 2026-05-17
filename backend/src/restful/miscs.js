@@ -133,8 +133,8 @@ function getEnv(req, res) {
 }
 
 async function refresh(_, res) {
-    // 1. get GitHub avatar and artifact store
-    await updateAvatar();
+    // 1. get artifact store
+    // await updateAvatar();
     await updateArtifactStore();
 
     // 2. clear resource cache

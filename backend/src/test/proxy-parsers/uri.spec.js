@@ -102,6 +102,59 @@ describe('Proxy URI parser coverage', function () {
             });
         });
 
+        it('parses SIP002 Base64URL shadowsocks userinfo', function () {
+            const proxy = parseOne(
+                `ss://${Base64.encodeURI(
+                    'aes-128-gcm:aa>',
+                )}@ss.example.com:8388#SS%20Base64URL`,
+            );
+
+            expectSubset(proxy, {
+                type: 'ss',
+                name: 'SS Base64URL',
+                server: 'ss.example.com',
+                port: 8388,
+                cipher: 'aes-128-gcm',
+                password: 'aa>',
+            });
+        });
+
+        it('parses SIP002 plain shadowsocks userinfo with percent-encoded credentials', function () {
+            const password = 'sec:ret@/plus+';
+            const proxy = parseOne(
+                `ss://aes-128-gcm:${encodeURIComponent(
+                    password,
+                )}@ss.example.com:8388#SS%20Plain`,
+            );
+
+            expectSubset(proxy, {
+                type: 'ss',
+                name: 'SS Plain',
+                server: 'ss.example.com',
+                port: 8388,
+                cipher: 'aes-128-gcm',
+                password,
+            });
+        });
+
+        it('parses SIP002 AEAD-2022 plain userinfo without Base64URL decoding', function () {
+            const password = 'YctPZ6U7xPPcU+gp3u+0tx/tRizJN9K8y+uKlW2qjlI=';
+            const proxy = parseOne(
+                `ss://2022-blake3-aes-256-gcm:${encodeURIComponent(
+                    password,
+                )}@192.168.100.1:8888#SS%202022`,
+            );
+
+            expectSubset(proxy, {
+                type: 'ss',
+                name: 'SS 2022',
+                server: '192.168.100.1',
+                port: 8888,
+                cipher: '2022-blake3-aes-256-gcm',
+                password,
+            });
+        });
+
         it('parses legacy shadowsocks URIs with v2ray-plugin options', function () {
             const legacy = Base64.encode(
                 'chacha20-ietf-poly1305:legacy-pass@legacy.example.com:443',
@@ -204,6 +257,69 @@ describe('Proxy URI parser coverage', function () {
                     path: '/?enc=aes-128-gcm',
                 },
             });
+        });
+
+        it('parses shadowsocks websocket path early data without keeping it in path', function () {
+            const userInfo = encodeURIComponent(
+                Base64.encode('aes-128-gcm:secret'),
+            );
+            const proxy = parseOne(
+                `ss://${userInfo}@ss-ws.example.com:443?type=ws&path=${encodeURIComponent(
+                    '/ws?a=1&ed=2048&b=2',
+                )}&host=cdn.example.com&security=tls#SS%20WS%20Early`,
+            );
+
+            expectSubset(proxy, {
+                type: 'ss',
+                name: 'SS WS Early',
+                server: 'ss-ws.example.com',
+                port: 443,
+                cipher: 'aes-128-gcm',
+                password: 'secret',
+                tls: true,
+                network: 'ws',
+                'ws-opts': {
+                    path: '/ws?a=1&b=2',
+                    headers: {
+                        Host: 'cdn.example.com',
+                    },
+                    'max-early-data': 2048,
+                    'early-data-header-name': 'Sec-WebSocket-Protocol',
+                },
+            });
+            expect(proxy['ws-opts']).to.not.have.property(
+                'v2ray-http-upgrade',
+            );
+        });
+
+        it('does not double-decode shadowsocks path query values before extracting early data', function () {
+            const userInfo = encodeURIComponent(
+                Base64.encode('aes-128-gcm:secret'),
+            );
+            const proxy = parseOne(
+                `ss://${userInfo}@ss-upgrade.example.com:443?type=httpupgrade&path=${encodeURIComponent(
+                    '/upgrade?redirect=%26ed%3D2048',
+                )}&host=cdn.example.com&security=tls#SS%20Upgrade%20Escaped`,
+            );
+
+            expectSubset(proxy, {
+                type: 'ss',
+                name: 'SS Upgrade Escaped',
+                network: 'ws',
+                'ws-opts': {
+                    path: '/upgrade?redirect=%26ed%3D2048',
+                    headers: {
+                        Host: 'cdn.example.com',
+                    },
+                    'v2ray-http-upgrade': true,
+                },
+            });
+            expect(proxy['ws-opts']).to.not.have.property(
+                'v2ray-http-upgrade-fast-open',
+            );
+            expect(proxy['ws-opts']).to.not.have.property(
+                '_v2ray-http-upgrade-ed',
+            );
         });
 
         it('parses shadowsocks shadow-tls compatibility payloads', function () {
@@ -469,7 +585,7 @@ describe('Proxy URI parser coverage', function () {
 
         it('parses Trojan URIs with websocket transport', function () {
             const proxy = parseOne(
-                'trojan://trojan-pass@trojan-ws.example.com?type=ws&host=ws.example.com&path=%2Fws#Trojan%20WS',
+                'trojan://trojan-pass@trojan-ws.example.com?type=ws&host=ws.example.com&path=%2Fws%3Fa%3D1%26ed%3D1024%26b%3D2#Trojan%20WS',
             );
 
             expectSubset(proxy, {
@@ -480,12 +596,38 @@ describe('Proxy URI parser coverage', function () {
                 password: 'trojan-pass',
                 network: 'ws',
                 'ws-opts': {
-                    path: '/ws',
+                    path: '/ws?a=1&b=2',
+                    headers: {
+                        Host: 'ws.example.com',
+                    },
+                    'max-early-data': 1024,
+                    'early-data-header-name': 'Sec-WebSocket-Protocol',
+                },
+            });
+        });
+
+        it('does not double-decode Trojan path query values before extracting early data', function () {
+            const proxy = parseOne(
+                `trojan://trojan-pass@trojan-ws.example.com?type=ws&host=ws.example.com&path=${encodeURIComponent(
+                    '/ws?redirect=%26ed%3D2048',
+                )}#Trojan%20WS%20Escaped`,
+            );
+
+            expectSubset(proxy, {
+                type: 'trojan',
+                name: 'Trojan WS Escaped',
+                network: 'ws',
+                'ws-opts': {
+                    path: '/ws?redirect=%26ed%3D2048',
                     headers: {
                         Host: 'ws.example.com',
                     },
                 },
             });
+            expect(proxy['ws-opts']).to.not.have.property('max-early-data');
+            expect(proxy['ws-opts']).to.not.have.property(
+                'early-data-header-name',
+            );
         });
 
         it('parses Trojan URIs with pcs as tls fingerprint', function () {

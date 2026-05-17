@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import { describe, it } from 'mocha';
 
+import $ from '@/core/app';
 import { ProxyUtils } from '@/core/proxy-utils';
 import {
     UUID,
@@ -10,6 +11,30 @@ import {
     produceExternal,
     produceInternal,
 } from './helpers';
+
+function captureWarns(fn) {
+    const originalWarn = $.warn;
+    const warnings = [];
+    $.warn = (message) => warnings.push(message);
+    try {
+        const result = fn();
+        return { result, warnings };
+    } finally {
+        $.warn = originalWarn;
+    }
+}
+
+function captureErrors(fn) {
+    const originalError = $.error;
+    const errors = [];
+    $.error = (message) => errors.push(message);
+    try {
+        const result = fn();
+        return { result, errors };
+    } finally {
+        $.error = originalError;
+    }
+}
 
 describe('Proxy structured producers', function () {
     it('filters unsupported Clash proxies by default and normalizes vmess ws early data', function () {
@@ -26,7 +51,7 @@ describe('Proxy structured producers', function () {
                 sni: 'sni.example.com',
                 network: 'ws',
                 'ws-opts': {
-                    path: '/ws?ed=2048',
+                    path: '/ws?a=1&ed=2048&b=2',
                     headers: {
                         Host: 'cdn.example.com',
                     },
@@ -59,7 +84,7 @@ describe('Proxy structured producers', function () {
             alterId: 0,
             servername: 'sni.example.com',
             'ws-opts': {
-                path: '/ws',
+                path: '/ws?a=1&b=2',
                 headers: {
                     Host: 'cdn.example.com',
                 },
@@ -129,8 +154,10 @@ describe('Proxy structured producers', function () {
 
             expect(internal, platform).to.have.length(1);
             expect(internal[0].name, platform).to.equal('WS');
-            expect(external.proxies.map((proxy) => proxy.name), platform).to
-                .deep.equal(['WS', 'QUIC']);
+            expect(
+                external.proxies.map((proxy) => proxy.name),
+                platform,
+            ).to.deep.equal(['WS', 'QUIC']);
         }
     });
 
@@ -193,7 +220,7 @@ describe('Proxy structured producers', function () {
             flow: 'xtls-rprx-vision',
             network: 'ws',
             'ws-opts': {
-                path: '/ws?ed=2048',
+                path: '/ws?a=1&ed=2048&b=2',
                 headers: {
                     Host: 'cdn.example.com',
                 },
@@ -216,7 +243,7 @@ describe('Proxy structured producers', function () {
                 'short-id': '08',
             },
             'ws-opts': {
-                path: '/ws',
+                path: '/ws?a=1&b=2',
                 'early-data-header-name': 'Sec-WebSocket-Protocol',
                 'max-early-data': 2048,
             },
@@ -226,6 +253,256 @@ describe('Proxy structured producers', function () {
             name: 'Reality',
             'client-fingerprint': 'chrome',
         });
+    });
+
+    it('normalizes websocket early data query params for Stash and Shadowrocket', function () {
+        const proxy = {
+            type: 'vmess',
+            name: 'WS Early Query',
+            server: 'vmess.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'auto',
+            alterId: 0,
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws?a=1&ed=2048&b=2',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+            },
+        };
+
+        for (const platform of ['Stash', 'Shadowrocket']) {
+            const internal = produceInternal(platform, proxy)[0];
+            expectSubset(internal, {
+                name: 'WS Early Query',
+                'ws-opts': {
+                    path: '/ws?a=1&b=2',
+                    'early-data-header-name': 'Sec-WebSocket-Protocol',
+                    'max-early-data': 2048,
+                },
+            });
+        }
+    });
+
+    it('leaves unsafe websocket early data query params untouched', function () {
+        const proxy = {
+            type: 'vmess',
+            name: 'WS Unsafe Early Query',
+            server: 'vmess.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'auto',
+            alterId: 0,
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws?a=1&ed=999999999999999999999&b=2',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+            },
+        };
+
+        const wsOpts = produceInternal('Clash', proxy)[0]['ws-opts'];
+
+        expect(wsOpts.path).to.equal('/ws?a=1&ed=999999999999999999999&b=2');
+        expect(wsOpts).to.not.have.property('early-data-header-name');
+        expect(wsOpts).to.not.have.property('max-early-data');
+    });
+
+    it('keeps explicit websocket early data fields over stale path query values', function () {
+        const proxy = {
+            type: 'vmess',
+            name: 'WS Explicit Early Fields',
+            server: 'vmess.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'auto',
+            alterId: 0,
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws?a=1&ed=2048&b=2',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'max-early-data': 4096,
+                'early-data-header-name': 'X-Data',
+            },
+        };
+
+        for (const platform of [
+            'Clash',
+            'ClashMeta',
+            'Stash',
+            'Shadowrocket',
+        ]) {
+            const wsOpts = loadProducedYaml(platform, proxy).proxies[0][
+                'ws-opts'
+            ];
+
+            expect(wsOpts.path, platform).to.equal('/ws?a=1&b=2');
+            expect(wsOpts['max-early-data'], platform).to.equal(4096);
+            expect(wsOpts['early-data-header-name'], platform).to.equal(
+                'X-Data',
+            );
+        }
+    });
+
+    it('normalizes httpupgrade path early data as httpupgrade metadata', function () {
+        const proxy = {
+            type: 'vmess',
+            name: 'HTTPUpgrade Early Query',
+            server: 'vmess.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'auto',
+            alterId: 0,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade?a=1&ed=2048&b=2',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'v2ray-http-upgrade': true,
+            },
+        };
+
+        for (const platform of [
+            'Clash',
+            'ClashMeta',
+            'Stash',
+            'Shadowrocket',
+        ]) {
+            const wsOpts = produceInternal(platform, proxy, {
+                'include-unsupported-proxy': true,
+            })[0]['ws-opts'];
+
+            expect(wsOpts.path).to.equal('/upgrade?a=1&b=2');
+            expect(wsOpts['v2ray-http-upgrade']).to.equal(true);
+            expect(wsOpts['v2ray-http-upgrade-fast-open']).to.equal(true);
+            expect(wsOpts['_v2ray-http-upgrade-ed']).to.equal('2048');
+            expect(wsOpts).to.not.have.property('early-data-header-name');
+            expect(wsOpts).to.not.have.property('max-early-data');
+
+            const externalWsOpts = loadProducedYaml(platform, proxy, {
+                'include-unsupported-proxy': true,
+            }).proxies[0]['ws-opts'];
+            expect(externalWsOpts.path).to.equal('/upgrade?a=1&b=2');
+            expect(externalWsOpts['v2ray-http-upgrade-fast-open']).to.equal(
+                true,
+            );
+            expect(externalWsOpts).to.not.have.property(
+                '_v2ray-http-upgrade-ed',
+            );
+        }
+    });
+
+    it('keeps explicit httpupgrade early data over stale path query values', function () {
+        const proxy = {
+            type: 'vmess',
+            name: 'HTTPUpgrade Explicit Early',
+            server: 'vmess.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'auto',
+            alterId: 0,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade?a=1&ed=1024&b=2',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'v2ray-http-upgrade': true,
+                'v2ray-http-upgrade-fast-open': true,
+                '_v2ray-http-upgrade-ed': '4096',
+            },
+        };
+
+        for (const platform of [
+            'Clash',
+            'ClashMeta',
+            'Stash',
+            'Shadowrocket',
+        ]) {
+            const wsOpts = produceInternal(platform, proxy, {
+                'include-unsupported-proxy': true,
+            })[0]['ws-opts'];
+
+            expect(wsOpts.path, platform).to.equal('/upgrade?a=1&b=2');
+            expect(wsOpts['_v2ray-http-upgrade-ed'], platform).to.equal('4096');
+        }
+    });
+
+    it('does not emit websocket early data fields for httpupgrade transports', function () {
+        const directProxy = {
+            type: 'vmess',
+            name: 'HTTPUpgrade Legacy Fields',
+            server: 'vmess.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'auto',
+            alterId: 0,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'v2ray-http-upgrade': true,
+                'v2ray-http-upgrade-fast-open': true,
+                'max-early-data': 1024,
+                'early-data-header-name': 'X-Upgrade',
+            },
+        };
+        const directProxyWithoutPath = {
+            type: 'vmess',
+            name: 'HTTPUpgrade Legacy Fields Without Path',
+            server: 'vmess.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'auto',
+            alterId: 0,
+            network: 'ws',
+            'ws-opts': {
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                'v2ray-http-upgrade': true,
+                'v2ray-http-upgrade-fast-open': true,
+                'max-early-data': 2048,
+                'early-data-header-name': 'X-Upgrade',
+            },
+        };
+        const parsedVlessProxy = ProxyUtils.parse(
+            `vless://${UUID}@vless-upgrade.example.com:443?type=httpupgrade&host=upgrade.example.com&path=%2Fupgrade&ed=1024&eh=X-Upgrade#VLESS%20Upgrade`,
+        )[0];
+
+        for (const proxy of [
+            directProxy,
+            directProxyWithoutPath,
+            parsedVlessProxy,
+        ]) {
+            for (const platform of [
+                'Clash',
+                'ClashMeta',
+                'Stash',
+                'Shadowrocket',
+            ]) {
+                const externalWsOpts = loadProducedYaml(platform, proxy, {
+                    'include-unsupported-proxy': true,
+                }).proxies[0]['ws-opts'];
+
+                expect(externalWsOpts['v2ray-http-upgrade']).to.equal(true);
+                expect(externalWsOpts).to.not.have.property(
+                    'early-data-header-name',
+                );
+                expect(externalWsOpts).to.not.have.property('max-early-data');
+                expect(externalWsOpts).to.not.have.property(
+                    '_v2ray-http-upgrade-ed',
+                );
+            }
+        }
     });
 
     it('emits Mihomo VLESS xhttp proxies and preserves xhttp options', function () {
@@ -280,6 +557,54 @@ describe('Proxy structured producers', function () {
                 'sc-min-posts-interval-ms': 300,
             },
         });
+    });
+
+    it('warns when Mihomo ECH sidecar DNS fields are exported', function () {
+        const proxy = {
+            type: 'vless',
+            name: 'Mihomo ECH DNS',
+            server: 'vless.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            'ech-opts': {
+                enable: true,
+                _dns: 'https://1.1.1.1/dns-query',
+                'query-server-name': 'ech.example.com',
+            },
+            network: 'xhttp',
+            'xhttp-opts': {
+                path: '/xhttp',
+                mode: 'stream-up',
+                'download-settings': {
+                    server: 'download.example.com',
+                    port: 8443,
+                    tls: true,
+                    'ech-opts': {
+                        enable: true,
+                        _dns: 'https://dns.example.com/dns-query',
+                        'query-server-name': 'download-ech.example.com',
+                    },
+                },
+            },
+        };
+
+        const { result: external, warnings } = captureWarns(() =>
+            loadProducedYaml('Mihomo', proxy),
+        );
+
+        expect(external.proxies).to.have.length(1);
+        expect(warnings).to.have.length(2);
+        expect(warnings[0]).to.include(
+            'mihomo 不支持在 ech-opts 中配置 ECH DNS',
+        );
+        expect(warnings[0]).to.include(
+            'dns["nameserver-policy"]["ech.example.com"] = ["https://1.1.1.1/dns-query"]',
+        );
+        expect(warnings[1]).to.include(
+            'dns["nameserver-policy"]["download-ech.example.com"] = ["https://dns.example.com/dns-query"]',
+        );
     });
 
     it('emits Mihomo VLESS xhttp download settings with scMinPostsIntervalMs', function () {
@@ -393,6 +718,142 @@ describe('Proxy structured producers', function () {
 
         expect(internal).to.have.length(0);
         expect(external.trim()).to.equal('proxies:');
+    });
+
+    it('keeps VLESS xhttp proxy when download-settings reality-opts has empty public-key and main reality is valid', function () {
+        // 上行（主代理）有合法 reality-opts，下行（download-settings）用
+        // reality-opts: { public-key: '' } 取消继承上行 Reality，合法配置。
+        const proxy = {
+            type: 'vless',
+            name: 'XHTTP Reality Cancel',
+            server: 'vless-xhttp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            network: 'xhttp',
+            'reality-opts': {
+                'public-key': 'pubkey',
+                'short-id': '08',
+            },
+            'xhttp-opts': {
+                path: '/xhttp',
+                mode: 'stream-up',
+                'download-settings': {
+                    server: 'download.example.com',
+                    port: 8443,
+                    tls: true,
+                    servername: 'download-sni.example.com',
+                    'reality-opts': { 'public-key': '' },
+                },
+            },
+        };
+
+        const internal = produceInternal('Mihomo', proxy);
+        expect(internal).to.have.length(1);
+        expect(internal[0].name).to.equal('XHTTP Reality Cancel');
+    });
+
+    it('filters out VLESS xhttp proxy when download-settings reality-opts is empty object (broken URI) even with valid main reality', function () {
+        // 下行 download-settings.reality-opts 为 {} (没有 public-key 字段)，
+        // 代表 URI 里声明了 security=reality 但 pbk 缺失，属于残缺配置，应过滤。
+        const proxy = {
+            type: 'vless',
+            name: 'XHTTP Broken Reality',
+            server: 'vless-xhttp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            network: 'xhttp',
+            'reality-opts': {
+                'public-key': 'pubkey',
+                'short-id': '08',
+            },
+            'xhttp-opts': {
+                path: '/xhttp',
+                mode: 'stream-up',
+                'download-settings': {
+                    server: 'download.example.com',
+                    port: 8443,
+                    tls: true,
+                    'reality-opts': {},
+                },
+            },
+        };
+
+        const internal = produceInternal('Mihomo', proxy);
+        expect(internal).to.have.length(0);
+    });
+
+    it('filters out VLESS xhttp proxy when download-settings reality-opts has empty public-key and main has no valid reality', function () {
+        // 下行 download-settings 有 reality-opts: { public-key: '' }，
+        // 但上行主代理本身没有合法 Reality，属于无效配置，应被过滤。
+        const proxy = {
+            type: 'vless',
+            name: 'XHTTP Invalid Reality',
+            server: 'vless-xhttp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            network: 'xhttp',
+            'xhttp-opts': {
+                path: '/xhttp',
+                mode: 'stream-up',
+                'download-settings': {
+                    server: 'download.example.com',
+                    port: 8443,
+                    tls: true,
+                    'reality-opts': { 'public-key': '' },
+                },
+            },
+        };
+
+        const internal = produceInternal('Mihomo', proxy);
+        expect(internal).to.have.length(0);
+    });
+
+    it('filters out VLESS proxy when main reality-opts has empty public-key', function () {
+        // 主代理 reality-opts.public-key 为空，无论下行如何，都应被过滤。
+        const proxy = {
+            type: 'vless',
+            name: 'Reality Empty Key',
+            server: 'vless.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            network: 'tcp',
+            'reality-opts': { 'public-key': '' },
+        };
+
+        const internal = produceInternal('Mihomo', proxy);
+        expect(internal).to.have.length(0);
+    });
+
+    it('does not let include-unsupported-proxy bypass malformed VLESS Reality validation', function () {
+        const proxy = {
+            type: 'vless',
+            name: 'Reality Empty Key',
+            server: 'vless.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            network: 'tcp',
+            'reality-opts': { 'public-key': '' },
+        };
+
+        const { result, errors } = captureErrors(() =>
+            produceInternal('Mihomo', proxy, {
+                'include-unsupported-proxy': true,
+            }),
+        );
+
+        expect(result).to.have.length(0);
+        expect(errors).to.have.length(1);
+        expect(errors[0]).to.include(
+            'Skipping VLESS Reality proxy Reality Empty Key: empty reality-opts.public-key',
+        );
     });
 
     it('normalizes Stash TUIC defaults and external yaml wrapper', function () {
@@ -816,6 +1277,217 @@ describe('Proxy structured producers', function () {
         });
     });
 
+    it('emits Egern HTTP and HTTPS root headers', function () {
+        const proxies = [
+            {
+                type: 'http',
+                name: 'Egern HTTP Headers',
+                server: 'http.example.com',
+                port: 8080,
+                username: 'user',
+                password: 'pass',
+                headers: {
+                    'X-Client': 'Egern',
+                    'X-Token': 'abc',
+                },
+            },
+            {
+                type: 'http',
+                name: 'Egern HTTPS Headers',
+                server: 'https.example.com',
+                port: 443,
+                tls: true,
+                sni: 'sni.example.com',
+                headers: {
+                    'X-Padding': '<random-string(16-32)>',
+                },
+            },
+        ];
+
+        const internal = produceInternal('Egern', proxies);
+        const external = loadProducedYaml('Egern', proxies);
+
+        expectSubset(internal[0], {
+            http: {
+                name: 'Egern HTTP Headers',
+                headers: {
+                    'X-Client': 'Egern',
+                    'X-Token': 'abc',
+                },
+            },
+        });
+        expectSubset(internal[1], {
+            https: {
+                name: 'Egern HTTPS Headers',
+                headers: {
+                    'X-Padding': '<random-string(16-32)>',
+                },
+            },
+        });
+        expectSubset(external.proxies[0], {
+            http: {
+                headers: {
+                    'X-Client': 'Egern',
+                    'X-Token': 'abc',
+                },
+            },
+        });
+        expectSubset(external.proxies[1], {
+            https: {
+                headers: {
+                    'X-Padding': '<random-string(16-32)>',
+                },
+            },
+        });
+    });
+
+    it('keeps Mihomo HTTP headers and filters unsupported h2-connect/trusttunnel header variants', function () {
+        const { result, errors } = captureErrors(() =>
+            produceInternal('Mihomo', [
+                {
+                    type: 'http',
+                    name: 'Mihomo HTTPS Headers',
+                    server: 'https.example.com',
+                    port: 443,
+                    tls: true,
+                    headers: {
+                        'X-Token': 'abc',
+                    },
+                },
+                {
+                    type: 'h2-connect',
+                    name: 'Mihomo H2 Headers',
+                    server: 'h2.example.com',
+                    port: 443,
+                    headers: {
+                        'X-Padding': '<random-string(16)>',
+                    },
+                },
+                {
+                    type: 'trusttunnel',
+                    name: 'Mihomo Trust Headers',
+                    server: 'trust.example.com',
+                    port: 443,
+                    headers: {
+                        'X-Client': 'Surge',
+                    },
+                },
+            ]),
+        );
+
+        expect(result).to.have.length(1);
+        expectSubset(result[0], {
+            type: 'http',
+            name: 'Mihomo HTTPS Headers',
+            headers: {
+                'X-Token': 'abc',
+            },
+        });
+        expect(errors).to.have.length(2);
+        expect(errors[0]).to.include(
+            'Target platform Mihomo does not support headers for HTTP/2 CONNECT proxy Mihomo H2 Headers',
+        );
+        expect(errors[1]).to.include(
+            'Target platform Mihomo does not support headers for TrustTunnel proxy Mihomo Trust Headers',
+        );
+    });
+
+    it('keeps Mihomo h2-connect/trusttunnel header variants when include-unsupported-proxy is enabled', function () {
+        const { result, errors } = captureErrors(() =>
+            produceInternal(
+                'Mihomo',
+                [
+                    {
+                        type: 'h2-connect',
+                        name: 'Mihomo H2 Headers',
+                        server: 'h2.example.com',
+                        port: 443,
+                        headers: {
+                            'X-Padding': '<random-string(16)>',
+                        },
+                    },
+                    {
+                        type: 'trusttunnel',
+                        name: 'Mihomo Trust Headers',
+                        server: 'trust.example.com',
+                        port: 443,
+                        headers: {
+                            'X-Client': 'Surge',
+                        },
+                    },
+                ],
+                { 'include-unsupported-proxy': true },
+            ),
+        );
+
+        expect(result).to.have.length(2);
+        expectSubset(result[0], {
+            type: 'h2-connect',
+            name: 'Mihomo H2 Headers',
+            headers: {
+                'X-Padding': '<random-string(16)>',
+            },
+        });
+        expectSubset(result[1], {
+            type: 'trusttunnel',
+            name: 'Mihomo Trust Headers',
+            headers: {
+                'X-Client': 'Surge',
+            },
+        });
+        expect(errors).to.have.length(0);
+    });
+
+    it('preserves supported HTTP root headers for sing-box and JSON outputs', function () {
+        const buildProxy = (name) => ({
+            type: 'http',
+            name,
+            server: 'http.example.com',
+            port: 8080,
+            username: 'user',
+            password: 'pass',
+            headers: {
+                'X-Token': 'abc',
+            },
+        });
+
+        const singBoxInternal = produceInternal(
+            'sing-box',
+            buildProxy('sing-box HTTP Headers'),
+        );
+        const singBoxExternal = loadProducedJson(
+            'sing-box',
+            buildProxy('sing-box HTTP Headers'),
+        );
+        const jsonExternal = loadProducedJson(
+            'JSON',
+            buildProxy('JSON HTTP Headers'),
+        );
+
+        expect(singBoxInternal).to.have.length(1);
+        expectSubset(singBoxInternal[0], {
+            type: 'http',
+            tag: 'sing-box HTTP Headers',
+            headers: {
+                'X-Token': 'abc',
+            },
+        });
+        expectSubset(singBoxExternal.outbounds[0], {
+            type: 'http',
+            tag: 'sing-box HTTP Headers',
+            headers: {
+                'X-Token': 'abc',
+            },
+        });
+        expectSubset(jsonExternal[0], {
+            type: 'http',
+            name: 'JSON HTTP Headers',
+            headers: {
+                'X-Token': 'abc',
+            },
+        });
+    });
+
     it('maps shadowsocks obfs plugin fields into Egern nested structures', function () {
         const proxy = {
             type: 'ss',
@@ -1064,6 +1736,63 @@ describe('Proxy structured producers', function () {
             type: 'wireguard',
             address: ['10.0.0.3/32', 'fd00::3/128'],
         });
+    });
+
+    it('emits Tailscale endpoint fields for sing-box exports', function () {
+        const output = loadProducedJson('sing-box', {
+            type: 'tailscale',
+            name: 'Mihomo TS',
+            'state-dir': './mihomo-ts',
+            'auth-key': 'tskey-auth-test',
+            'control-url': 'https://headscale.example.com',
+            ephemeral: true,
+            hostname: 'sub-store',
+            udp: true,
+            'accept-routes': true,
+            'exit-node': '100.64.0.1',
+            'exit-node-allow-lan-access': true,
+            'dialer-proxy': 'proxy-out',
+            'udp-timeout': '30s',
+        });
+
+        const mihomo = output.endpoints.find(
+            (endpoint) => endpoint.tag === 'Mihomo TS',
+        );
+
+        expectSubset(mihomo, {
+            type: 'tailscale',
+            state_directory: './mihomo-ts',
+            auth_key: 'tskey-auth-test',
+            control_url: 'https://headscale.example.com',
+            ephemeral: true,
+            hostname: 'sub-store',
+            accept_routes: true,
+            exit_node: '100.64.0.1',
+            exit_node_allow_lan_access: true,
+            detour: 'proxy-out',
+            udp_timeout: '30s',
+        });
+        expect(mihomo).to.not.have.property('udp');
+    });
+
+    it('does not mix Tailscale control_http_client with legacy sing-box dialer fields', function () {
+        const output = loadProducedJson('sing-box', {
+            type: 'tailscale',
+            name: 'Tailscale Control Client',
+            'control-http-client': {
+                detour: 'control-out',
+            },
+            'dialer-proxy': 'legacy-out',
+        });
+
+        const tailscale = output.endpoints.find(
+            (endpoint) => endpoint.tag === 'Tailscale Control Client',
+        );
+
+        expect(tailscale.control_http_client).to.deep.equal({
+            detour: 'control-out',
+        });
+        expect(tailscale).to.not.have.property('detour');
     });
 
     it('emits WireGuard interface CIDR suffixes for Egern exports', function () {
@@ -1560,6 +2289,96 @@ describe('Proxy structured producers', function () {
         expect(outbound.plugin_opts).to.include('mux=0');
     });
 
+    it('maps mihomo udp capability flags to sing-box network only when disabling UDP', function () {
+        const output = loadProducedJson('sing-box', [
+            {
+                type: 'ss',
+                name: 'SS UDP On',
+                server: 'ss-on.example.com',
+                port: 8388,
+                cipher: 'aes-128-gcm',
+                password: 'secret',
+                udp: true,
+            },
+            {
+                type: 'ss',
+                name: 'SS UDP Off',
+                server: 'ss-off.example.com',
+                port: 8388,
+                cipher: 'aes-128-gcm',
+                password: 'secret',
+                udp: false,
+            },
+            {
+                type: 'ss',
+                name: 'SS Network Override',
+                server: 'ss-override.example.com',
+                port: 8388,
+                cipher: 'aes-128-gcm',
+                password: 'secret',
+                udp: false,
+                _network: 'udp',
+            },
+        ]);
+
+        const udpOn = output.outbounds.find((item) => item.tag === 'SS UDP On');
+        const udpOff = output.outbounds.find(
+            (item) => item.tag === 'SS UDP Off',
+        );
+        const networkOverride = output.outbounds.find(
+            (item) => item.tag === 'SS Network Override',
+        );
+
+        expect(udpOn).to.not.have.property('network');
+        expect(udpOff).to.have.property('network', 'tcp');
+        expect(networkOverride).to.have.property('network', 'udp');
+    });
+
+    it('does not emit sing-box network for protocols without sing-box network options', function () {
+        const output = loadProducedJson('sing-box', [
+            {
+                type: 'anytls',
+                name: 'AnyTLS No Network',
+                server: 'anytls.example.com',
+                port: 443,
+                password: 'secret',
+                udp: false,
+                _network: 'udp',
+            },
+            {
+                type: 'tailscale',
+                name: 'Tailscale No Network',
+                udp: false,
+                _network: 'udp',
+            },
+            {
+                type: 'wireguard',
+                name: 'WireGuard No Network',
+                server: 'wg.example.com',
+                port: 51820,
+                'private-key': 'private-key',
+                'public-key': 'public-key',
+                ip: '10.0.0.2',
+                udp: false,
+                _network: 'udp',
+            },
+        ]);
+
+        const anytls = output.outbounds.find(
+            (item) => item.tag === 'AnyTLS No Network',
+        );
+        const tailscale = output.endpoints.find(
+            (item) => item.tag === 'Tailscale No Network',
+        );
+        const wireguard = output.endpoints.find(
+            (item) => item.tag === 'WireGuard No Network',
+        );
+
+        expect(anytls).to.not.have.property('network');
+        expect(tailscale).to.not.have.property('network');
+        expect(wireguard).to.not.have.property('network');
+    });
+
     it('emits sing-box outbounds with reality tls and websocket transport', function () {
         const output = loadProducedJson('sing-box', {
             type: 'vless',
@@ -1571,7 +2390,7 @@ describe('Proxy structured producers', function () {
             flow: 'xtls-rprx-vision',
             network: 'ws',
             'ws-opts': {
-                path: '/ws?ed=2048',
+                path: '/ws?a=1&ed=2048&b=2',
                 headers: {
                     Host: 'cdn.example.com',
                 },
@@ -1605,7 +2424,7 @@ describe('Proxy structured producers', function () {
             },
             transport: {
                 type: 'ws',
-                path: '/ws',
+                path: '/ws?a=1&b=2',
                 headers: {
                     Host: 'cdn.example.com',
                 },
@@ -1613,6 +2432,42 @@ describe('Proxy structured producers', function () {
                 max_early_data: 2048,
             },
         });
+    });
+
+    it('emits sing-box httpupgrade transport without websocket early data fields', function () {
+        const output = loadProducedJson('sing-box', {
+            type: 'vless',
+            name: 'Upgrade',
+            server: 'vless-upgrade.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/upgrade?a=1&ed=2048&b=2',
+                headers: {
+                    Host: 'upgrade.example.com',
+                },
+                'v2ray-http-upgrade': true,
+            },
+        });
+
+        expect(output.outbounds).to.have.length(1);
+        expectSubset(output.outbounds[0], {
+            tag: 'Upgrade',
+            type: 'vless',
+            transport: {
+                type: 'httpupgrade',
+                path: '/upgrade?a=1&b=2',
+                host: 'upgrade.example.com',
+            },
+        });
+        expect(output.outbounds[0].transport).to.not.have.property(
+            'early_data_header_name',
+        );
+        expect(output.outbounds[0].transport).to.not.have.property(
+            'max_early_data',
+        );
     });
 
     it('normalizes sing-box ech PEM config strings with escaped newlines', function () {
@@ -1693,5 +2548,125 @@ describe('Proxy structured producers', function () {
             type: 'http',
             name: 'JSON HTTP',
         });
+    });
+
+    it('blocks Mihomo xhttp reality-opts inheritance when upload has reality-opts but download does not', function () {
+        const proxy = {
+            type: 'vless',
+            name: 'XHTTP Reality No Download Reality',
+            server: 'vless-xhttp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            network: 'xhttp',
+            'reality-opts': {
+                'public-key': 'upload-pubkey',
+                'short-id': 'ab',
+            },
+            'xhttp-opts': {
+                path: '/xhttp',
+                mode: 'stream-up',
+                'download-settings': {
+                    server: 'download.example.com',
+                    port: 8443,
+                    tls: true,
+                    path: '/download',
+                },
+            },
+        };
+
+        const internal = produceInternal('Mihomo', proxy);
+        const external = loadProducedYaml('Mihomo', proxy);
+
+        expect(internal).to.have.length(1);
+        expectSubset(internal[0], {
+            'xhttp-opts': {
+                'download-settings': {
+                    'reality-opts': { 'public-key': '' },
+                },
+            },
+        });
+        expectSubset(external.proxies[0], {
+            'xhttp-opts': {
+                'download-settings': {
+                    'reality-opts': { 'public-key': '' },
+                },
+            },
+        });
+    });
+
+    it('does not inject reality-opts blocker when download-settings already has reality-opts', function () {
+        const proxy = {
+            type: 'vless',
+            name: 'XHTTP Reality Both',
+            server: 'vless-xhttp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            network: 'xhttp',
+            'reality-opts': {
+                'public-key': 'upload-pubkey',
+                'short-id': 'ab',
+            },
+            'xhttp-opts': {
+                path: '/xhttp',
+                mode: 'stream-up',
+                'download-settings': {
+                    server: 'download.example.com',
+                    port: 8443,
+                    tls: true,
+                    path: '/download',
+                    'reality-opts': {
+                        'public-key': 'download-pubkey',
+                        'short-id': 'cd',
+                    },
+                },
+            },
+        };
+
+        const internal = produceInternal('Mihomo', proxy);
+
+        expect(internal).to.have.length(1);
+        expectSubset(internal[0], {
+            'xhttp-opts': {
+                'download-settings': {
+                    'reality-opts': {
+                        'public-key': 'download-pubkey',
+                        'short-id': 'cd',
+                    },
+                },
+            },
+        });
+    });
+
+    it('does not inject reality-opts blocker when upload has no reality-opts', function () {
+        const proxy = {
+            type: 'vless',
+            name: 'XHTTP No Reality',
+            server: 'vless-xhttp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            network: 'xhttp',
+            'xhttp-opts': {
+                path: '/xhttp',
+                mode: 'stream-up',
+                'download-settings': {
+                    server: 'download.example.com',
+                    port: 8443,
+                    tls: true,
+                    path: '/download',
+                },
+            },
+        };
+
+        const internal = produceInternal('Mihomo', proxy);
+
+        expect(internal).to.have.length(1);
+        const ds = internal[0]['xhttp-opts']['download-settings'];
+        expect(ds).to.not.have.property('reality-opts');
     });
 });

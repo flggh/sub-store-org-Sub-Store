@@ -35,6 +35,7 @@ import {
     parseBooleanStyleArgs,
 } from '@/utils/parse';
 import { hex_md5 } from '@/vendor/md5';
+import SurgeMac_Producer from './producers/surgemac';
 
 function preprocess(raw) {
     for (const processor of PROXY_PREPROCESSORS) {
@@ -93,7 +94,7 @@ function parse(raw) {
         if (['vless', 'vmess'].includes(proxy.type)) {
             const isProxyUUIDValid = isValidUUID(proxy.uuid);
             if (!isProxyUUIDValid) {
-                $.info(`UUID may be invalid: ${proxy.name} ${proxy.uuid}`);
+                $.warn(`UUID may be invalid: ${proxy.name} ${proxy.uuid}`);
             }
             // return isProxyUUIDValid;
         } else if (['hysteria2'].includes(proxy.type)) {
@@ -256,15 +257,33 @@ function produce(proxies, targetPlatform, type, opts = {}) {
 
     // filter unsupported proxies
     proxies = proxies.filter((proxy) => {
+        const includeUnsupportedProxy = opts['include-unsupported-proxy'];
+
         // 检查代理是否支持目标平台
-        if (proxy.supported && proxy.supported[targetPlatform] === false) {
+        if (
+            !includeUnsupportedProxy &&
+            proxy.supported &&
+            proxy.supported[targetPlatform] === false
+        ) {
             return false;
         }
 
         if (
+            !includeUnsupportedProxy &&
+            hasRootProxyHeaders(proxy) &&
+            isRootHeaderSensitiveProxy(proxy) &&
+            !supportsRootProxyHeaders(proxy, targetPlatform)
+        ) {
+            $.error(
+                `Target platform ${targetPlatform} does not support headers for ${getRootHeaderProxyLabel(proxy)} proxy ${proxy.name || `${proxy.server}:${proxy.port}`}. Proxy has been filtered.`,
+            );
+            return false;
+        }
+
+        if (
+            !includeUnsupportedProxy &&
             isShadowsocksOverTls(proxy) &&
-            !supportedShadowsocksOverTlsTargets.has(normalizedTarget) &&
-            !opts['include-unsupported-proxy']
+            !supportedShadowsocksOverTlsTargets.has(normalizedTarget)
         ) {
             return false;
         }
@@ -273,7 +292,7 @@ function produce(proxies, targetPlatform, type, opts = {}) {
         if (['vless', 'vmess'].includes(proxy.type)) {
             const isProxyUUIDValid = isValidUUID(proxy.uuid);
             if (!isProxyUUIDValid)
-                $.info(`UUID may be invalid: ${proxy.name} ${proxy.uuid}`);
+                $.warn(`UUID may be invalid: ${proxy.name} ${proxy.uuid}`);
             // return isProxyUUIDValid;
             const isVlessType = proxy.type === 'vless';
             const realityChecks = isVlessType
@@ -289,6 +308,23 @@ function produce(proxies, targetPlatform, type, opts = {}) {
                 : [];
             for (const [realityLabel, realityOpts] of realityChecks) {
                 if (realityOpts && !isNotBlank(realityOpts['public-key'])) {
+                    // When the main proxy (上行) uses Reality with a valid
+                    // public-key, an explicit empty-string public-key in xhttp
+                    // download-settings reality-opts (下行) is intentional:
+                    // it explicitly cancels Reality inheritance for the
+                    // download stream. This is a legitimate Mihomo config.
+                    // Distinguish from reality-opts:{} (missing public-key
+                    // entirely) which represents a broken/incomplete Reality
+                    // config parsed from a malformed URI and should still be
+                    // rejected.
+                    if (
+                        realityLabel ===
+                            'xhttp download-settings reality-opts' &&
+                        isNotBlank(proxy['reality-opts']?.['public-key']) &&
+                        realityOpts['public-key'] === ''
+                    ) {
+                        continue;
+                    }
                     // Intentional: a VLESS Reality node without public-key is
                     // not a valid Mihomo export or regenerated share link. We
                     // keep the marker while parsing so callers can inspect the
@@ -365,16 +401,37 @@ function produce(proxies, targetPlatform, type, opts = {}) {
                     return producer.produce(proxy, type, opts);
                 } catch (err) {
                     $.error(
-                        `Cannot produce proxy: ${JSON.stringify(
-                            proxy,
-                            null,
-                            2,
-                        )}\nReason: ${err}`,
+                        `Cannot produce proxy: ${proxy.name}\nReason: ${err}`,
                     );
                     return '';
                 }
             })
             .filter((line) => line.length > 0);
+        if (opts._merged && opts.localPort >= 1) {
+            list.push(
+                SurgeMac_Producer().produce(
+                    {
+                        name: opts._merged.name,
+                        type: 'external',
+                        udp: true,
+                        exec: opts._merged.exec,
+                        'local-port': opts.localPort,
+                        args: [
+                            '-config',
+                            Base64.encode(
+                                JSON.stringify({
+                                    ...opts._merged.config,
+                                    'mixed-port': opts.localPort,
+                                }),
+                            ),
+                        ],
+                        addresses: [],
+                    },
+                    type,
+                    opts,
+                ),
+            );
+        }
         list = type === 'internal' ? list : list.join('\n');
         if (
             targetPlatform.startsWith('Surge') &&
@@ -390,6 +447,64 @@ ${list}`;
     } else if (producer.type === 'ALL') {
         return producer.produce(proxies, type, opts);
     }
+}
+
+function hasRootProxyHeaders(proxy) {
+    return (
+        proxy?.headers &&
+        typeof proxy.headers === 'object' &&
+        Object.keys(proxy.headers).length > 0
+    );
+}
+
+function isRootHeaderSensitiveProxy(proxy) {
+    return ['http', 'h2-connect', 'trusttunnel'].includes(proxy?.type);
+}
+
+function supportsRootProxyHeaders(proxy, targetPlatform) {
+    const normalizedTarget = `${targetPlatform}`.toLowerCase();
+
+    if (normalizedTarget.startsWith('surge')) {
+        return ['http', 'h2-connect', 'trusttunnel'].includes(proxy.type);
+    }
+
+    if (normalizedTarget === 'egern') {
+        return proxy.type === 'http';
+    }
+
+    if (
+        ['clashmeta', 'clash.meta', 'meta', 'mihomo'].includes(
+            normalizedTarget,
+        )
+    ) {
+        return proxy.type === 'http';
+    }
+
+    if (['singbox', 'sing-box'].includes(normalizedTarget)) {
+        return proxy.type === 'http';
+    }
+
+    if (normalizedTarget === 'json') {
+        return ['http', 'h2-connect', 'trusttunnel'].includes(proxy.type);
+    }
+
+    return false;
+}
+
+function getRootHeaderProxyLabel(proxy) {
+    if (proxy.type === 'http') {
+        return proxy.tls ? 'HTTPS' : 'HTTP';
+    }
+
+    if (proxy.type === 'h2-connect') {
+        return 'HTTP/2 CONNECT';
+    }
+
+    if (proxy.type === 'trusttunnel') {
+        return 'TrustTunnel';
+    }
+
+    return proxy.type;
 }
 
 export const ProxyUtils = {
@@ -562,6 +677,7 @@ function lastParse(proxy) {
             'juicity',
             'anytls',
             'trusttunnel',
+            'h2-connect',
             'naive',
         ].includes(proxy.type)
     ) {

@@ -25,6 +25,22 @@ function buildEmptyNezhaPayload() {
     );
 }
 
+function getMihomoExternalOptions(query) {
+    const useMihomoExternal = query.target === 'SurgeMac';
+    const mihomoExternal = useMihomoExternal ? query.mihomoExternal : undefined;
+    const mihomoMerge = useMihomoExternal ? query.mihomoMerge : undefined;
+    const mihomoMergeName = useMihomoExternal
+        ? query.mihomoMergeName
+        : undefined;
+
+    return {
+        useMihomoExternal,
+        mihomoExternal,
+        mihomoMerge,
+        mihomoMergeName,
+    };
+}
+
 export default function register($app) {
     $app.get('/share/col/:name/:target', async (req, res) => {
         const { target } = req.params;
@@ -99,7 +115,8 @@ export default function register($app) {
 async function downloadSubscription(req, res) {
     let { name, nezhaIndex } = req.params;
 
-    const useMihomoExternal = req.query.target === 'SurgeMac';
+    const { useMihomoExternal, mihomoMerge, mihomoMergeName, mihomoExternal } =
+        getMihomoExternalOptions(req.query);
 
     const platform =
         req.query.platform ||
@@ -134,6 +151,9 @@ async function downloadSubscription(req, res) {
             params: req.params,
             headers: req.headers,
             body: req.body,
+            socket: {
+                remoteAddress: req.socket?.remoteAddress,
+            },
         },
     };
     if (req.query.$options) {
@@ -174,16 +194,23 @@ async function downloadSubscription(req, res) {
         $.info(`指定生产类型: ${produceType}`);
     }
     if (includeUnsupportedProxy) {
-        $.info(
-            `包含官方/商店版/未续费订阅不支持的协议: ${includeUnsupportedProxy}`,
-        );
+        $.info(`包含官方/商店版不支持的协议: ${includeUnsupportedProxy}`);
     }
     if (prettyYaml === 'false' || prettyYaml === false) {
         $.info(`指定输出 JSON 行格式 (pretty-yaml=false): ${prettyYaml}`);
     }
+    if (mihomoMerge) {
+        $.info(`指定合并 Mihomo External: ${mihomoMerge}`);
+    }
+    if (mihomoMergeName) {
+        $.info(`指定合并 Mihomo External 名称: ${mihomoMergeName}`);
+    }
 
     if (useMihomoExternal) {
         $.info(`手动指定了 target 为 SurgeMac, 将使用 Mihomo External`);
+    }
+    if (mihomoExternal) {
+        $.info(`手动指定了 Mihomo External 链接参数: ${mihomoExternal}`);
     }
 
     if (noCache) {
@@ -220,6 +247,9 @@ async function downloadSubscription(req, res) {
                 produceOpts: {
                     'include-unsupported-proxy': includeUnsupportedProxy,
                     useMihomoExternal,
+                    merge: mihomoMerge,
+                    mergeName: mihomoMergeName,
+                    mihomoExternal,
                     prettyYaml,
                 },
                 $options,
@@ -265,6 +295,7 @@ async function downloadSubscription(req, res) {
                             undefined,
                             proxy || sub.proxy,
                             $arguments.flowUrl,
+                            $arguments.flowHeaders,
                         );
                         if (flowInfo) {
                             const headers = normalizeFlowHeader(flowInfo, true);
@@ -404,7 +435,8 @@ async function downloadSubscription(req, res) {
 async function downloadCollection(req, res) {
     let { name, nezhaIndex } = req.params;
 
-    const useMihomoExternal = req.query.target === 'SurgeMac';
+    const { useMihomoExternal, mihomoMerge, mihomoMergeName, mihomoExternal } =
+        getMihomoExternalOptions(req.query);
 
     const platform =
         req.query.platform ||
@@ -418,7 +450,6 @@ async function downloadCollection(req, res) {
     $.info(
         `正在下载组合订阅：${name}\n请求 User-Agent: ${reqUA}\n请求 target: ${req.query.target}\n实际输出: ${platform}`,
     );
-
     let {
         ignoreFailedRemoteSub,
         produceType,
@@ -438,6 +469,9 @@ async function downloadCollection(req, res) {
             params: req.params,
             headers: req.headers,
             body: req.body,
+            socket: {
+                remoteAddress: req.socket?.remoteAddress,
+            },
         },
     };
     if (req.query.$options) {
@@ -464,16 +498,23 @@ async function downloadCollection(req, res) {
     }
 
     if (includeUnsupportedProxy) {
-        $.info(
-            `包含官方/商店版/未续费订阅不支持的协议: ${includeUnsupportedProxy}`,
-        );
+        $.info(`包含官方/商店版不支持的协议: ${includeUnsupportedProxy}`);
     }
     if (prettyYaml === 'false' || prettyYaml === false) {
         $.info(`指定输出 JSON 行格式 (pretty-yaml=false): ${prettyYaml}`);
     }
+    if (mihomoMerge) {
+        $.info(`指定合并 Mihomo External: ${mihomoMerge}`);
+    }
+    if (mihomoMergeName) {
+        $.info(`指定合并 Mihomo External 名称: ${mihomoMergeName}`);
+    }
 
     if (useMihomoExternal) {
         $.info(`手动指定了 target 为 SurgeMac, 将使用 Mihomo External`);
+    }
+    if (mihomoExternal) {
+        $.info(`手动指定了 Mihomo External 链接参数: ${mihomoExternal}`);
     }
     if (noCache) {
         $.info(`指定不使用缓存: ${noCache}`);
@@ -490,6 +531,9 @@ async function downloadCollection(req, res) {
                 produceOpts: {
                     'include-unsupported-proxy': includeUnsupportedProxy,
                     useMihomoExternal,
+                    merge: mihomoMerge,
+                    mergeName: mihomoMergeName,
+                    mihomoExternal,
                     prettyYaml,
                 },
                 $options,
@@ -498,83 +542,99 @@ async function downloadCollection(req, res) {
                 ua: reqUA,
             });
             let subUserInfoOfSub;
-            // forward flow header from the first subscription in this collection
-            const allSubs = $.read(SUBS_KEY) || [];
-            const subnames = Array.isArray(collection.subscriptions)
-                ? collection.subscriptions
-                : [];
-            if (subnames.length > 0) {
-                const sub = findByName(allSubs, subnames[0]);
-                if (
-                    sub &&
-                    (sub.source !== 'local' ||
-                    ['localFirst', 'remoteFirst'].includes(sub.mergeSources))
-                ) {
-                    try {
-                        let url =
-                            `${sub.url || ''}`
-                                .split(/[\r\n]+/)
-                                .map((i) => i.trim())
-                                .filter((i) => i.length)?.[0] || '';
+            // 默认透传第一个子订阅的流量信息，除非 firstSubFlow 显式设置为 false
+            if (collection.firstSubFlow !== false) {
+                // forward flow header from the first subscription in this collection
+                const allSubs = $.read(SUBS_KEY) || [];
+                const subnames = Array.isArray(collection.subscriptions)
+                    ? collection.subscriptions
+                    : [];
+                if (subnames.length > 0) {
+                    const sub = findByName(allSubs, subnames[0]);
+                    if (
+                        sub &&
+                        (sub.source !== 'local' ||
+                            ['localFirst', 'remoteFirst'].includes(
+                                sub.mergeSources,
+                            ))
+                    ) {
+                        try {
+                            let url =
+                                `${sub.url || ''}`
+                                    .split(/[\r\n]+/)
+                                    .map((i) => i.trim())
+                                    .filter((i) => i.length)?.[0] || '';
 
-                        let $arguments = {};
-                        const rawArgs = url.split('#');
-                        url = url.split('#')[0];
-                        if (rawArgs.length > 1) {
+                            let $arguments = {};
+                            const rawArgs = url.split('#');
+                            url = url.split('#')[0];
+                            if (rawArgs.length > 1) {
+                                try {
+                                    // 支持 `#${encodeURIComponent(JSON.stringify({arg1: "1"}))}`
+                                    $arguments = JSON.parse(
+                                        decodeURIComponent(rawArgs[1]),
+                                    );
+                                } catch (e) {
+                                    $arguments = parseBooleanStyleArgs(
+                                        rawArgs[1],
+                                    );
+                                }
+                            }
+                            if (!$arguments.noFlow && /^https?:/.test(url)) {
+                                subUserInfoOfSub = await getFlowHeaders(
+                                    $arguments?.insecure
+                                        ? `${url}#insecure`
+                                        : url,
+                                    $arguments.flowUserAgent,
+                                    undefined,
+                                    proxy || sub.proxy || collection.proxy,
+                                    $arguments.flowUrl,
+                                    $arguments.flowHeaders,
+                                );
+                            }
+                        } catch (err) {
+                            $.error(
+                                `组合订阅 ${name} 中的子订阅 ${
+                                    sub.name
+                                } 获取流量信息时发生错误: ${
+                                    err.message ?? err
+                                }`,
+                            );
+                        }
+                    }
+                    if (sub.subUserinfo) {
+                        let subUserInfo;
+                        if (/^https?:\/\//.test(sub.subUserinfo)) {
                             try {
-                                // 支持 `#${encodeURIComponent(JSON.stringify({arg1: "1"}))}`
-                                $arguments = JSON.parse(
-                                    decodeURIComponent(rawArgs[1]),
+                                subUserInfo = await getFlowHeaders(
+                                    undefined,
+                                    undefined,
+                                    undefined,
+                                    proxy || sub.proxy,
+                                    sub.subUserinfo,
                                 );
                             } catch (e) {
-                                $arguments = parseBooleanStyleArgs(rawArgs[1]);
+                                $.error(
+                                    `组合订阅 ${name} 使用自定义流量链接 ${
+                                        sub.subUserinfo
+                                    } 获取流量信息时发生错误: ${JSON.stringify(
+                                        e,
+                                    )}`,
+                                );
                             }
+                        } else {
+                            subUserInfo = sub.subUserinfo;
                         }
-                        if (!$arguments.noFlow && /^https?:/.test(url)) {
-                            subUserInfoOfSub = await getFlowHeaders(
-                                $arguments?.insecure ? `${url}#insecure` : url,
-                                $arguments.flowUserAgent,
-                                undefined,
-                                proxy || sub.proxy || collection.proxy,
-                                $arguments.flowUrl,
-                            );
-                        }
-                    } catch (err) {
-                        $.error(
-                            `组合订阅 ${name} 中的子订阅 ${
-                                sub.name
-                            } 获取流量信息时发生错误: ${err.message ?? err}`,
-                        );
+                        subUserInfoOfSub = [subUserInfo, subUserInfoOfSub]
+                            .filter((i) => i)
+                            .join('; ');
                     }
                 }
-                if (sub.subUserinfo) {
-                    let subUserInfo;
-                    if (/^https?:\/\//.test(sub.subUserinfo)) {
-                        try {
-                            subUserInfo = await getFlowHeaders(
-                                undefined,
-                                undefined,
-                                undefined,
-                                proxy || sub.proxy,
-                                sub.subUserinfo,
-                            );
-                        } catch (e) {
-                            $.error(
-                                `组合订阅 ${name} 使用自定义流量链接 ${
-                                    sub.subUserinfo
-                                } 获取流量信息时发生错误: ${JSON.stringify(e)}`,
-                            );
-                        }
-                    } else {
-                        subUserInfo = sub.subUserinfo;
-                    }
-                    subUserInfoOfSub = [subUserInfo, subUserInfoOfSub]
-                        .filter((i) => i)
-                        .join('; ');
-                }
-            }
 
-            $.info(`组合订阅 ${name} 透传的的流量信息: ${subUserInfoOfSub}`);
+                $.info(
+                    `组合订阅 ${name} 透传的的流量信息: ${subUserInfoOfSub}`,
+                );
+            }
 
             let subUserInfoOfCol;
             if (/^https?:\/\//.test(collection.subUserinfo)) {

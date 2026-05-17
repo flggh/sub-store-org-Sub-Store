@@ -6,19 +6,16 @@ import {
     COLLECTIONS_KEY,
 } from '@/constants';
 import $ from '@/core/app';
-import { produceArtifact } from '@/restful/sync';
-import { syncToGist } from '@/restful/artifacts';
+import { produceArtifact, uploadArtifactBatches } from '@/restful/sync';
 import { findByName } from '@/utils/database';
-import {
-    safeDecodeURIComponent,
-    parseArgumentString,
-} from '@/utils/parse';
+import { safeDecodeURIComponent } from '@/utils/parse';
+import { hasCronArtifactSyncCredentials } from '@/products/cron-sync-artifacts-eligibility';
 
 !(async function () {
     let arg;
     if (typeof $argument != 'undefined') {
         // eslint-disable-next-line no-undef
-        arg = parseArgumentString($argument);
+        arg = parseArgument($argument);
     } else {
         arg = {};
     }
@@ -40,15 +37,38 @@ import {
     } else {
         const settings = $.read(SETTINGS_KEY) || {};
         // if GitHub token is not configured
-        if (!settings.githubUser || !settings.gistToken) return;
+        if (!hasCronArtifactSyncCredentials(settings)) return;
 
         const artifacts = $.read(ARTIFACTS_KEY) || [];
         if (!artifacts || artifacts.length === 0) return;
 
         const shouldSync = artifacts.some((artifact) => artifact.sync);
-        if (shouldSync) await doSync();
+        if (shouldSync) await doSync(arg);
     }
 })().finally(() => $.done());
+
+function parseArgument(rawArgument) {
+    if (rawArgument == null) return {};
+    if (typeof rawArgument === 'object') return rawArgument;
+    return Object.fromEntries(
+        `${rawArgument}`
+            .split('&')
+            .filter(Boolean)
+            .map((item) => {
+                const [key, ...value] = item.split('=');
+                return [key, value.join('=')];
+            }),
+    );
+}
+
+function isTruthyArgument(value, defaultValue = true) {
+    if (value == null || value === '') return defaultValue;
+    const normalized = `${value}`
+        .trim()
+        .replace(/^["']|["']$/g, '')
+        .toLowerCase();
+    return !['false', '0', 'no', 'off'].includes(normalized);
+}
 
 async function produceArtifacts(names, type) {
     try {
@@ -72,7 +92,8 @@ async function produceArtifacts(names, type) {
         $.error(`produceArtifacts error: ${e.message ?? e}`);
     }
 }
-async function doSync() {
+async function doSync(arg = {}) {
+    const syncSuccessNotify = isTruthyArgument(arg.sync_success_notify);
     console.log(
         `
 ┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅
@@ -192,48 +213,12 @@ async function doSync() {
             );
         }
 
-        const resp = await syncToGist(files);
-        const body = JSON.parse(resp.body);
-        delete body.history;
-        delete body.forks;
-        delete body.owner;
-        Object.values(body.files).forEach((file) => {
-            delete file.content;
+        const uploaded = await uploadArtifactBatches({
+            allArtifacts,
+            files,
+            valid,
+            invalid,
         });
-        $.info('上传配置响应:');
-        $.info(JSON.stringify(body, null, 2));
-
-        for (const artifact of allArtifacts) {
-            if (
-                artifact.sync &&
-                artifact.source &&
-                valid.includes(artifact.name)
-            ) {
-                artifact.updated = new Date().getTime();
-                // extract real url from gist
-                let files = body.files;
-                let isGitLab;
-                if (Array.isArray(files)) {
-                    isGitLab = true;
-                    files = Object.fromEntries(
-                        files.map((item) => [item.path, item]),
-                    );
-                }
-                const raw_url =
-                    files[encodeURIComponent(artifact.name)]?.raw_url;
-                const new_url = isGitLab
-                    ? raw_url
-                    : raw_url?.replace(/\/raw\/[^/]*\/(.*)/, '/raw/$1');
-                $.info(
-                    `上传配置完成\n文件列表: ${Object.keys(files).join(
-                        ', ',
-                    )}\n当前文件: ${encodeURIComponent(
-                        artifact.name,
-                    )}\n响应返回的原始链接: ${raw_url}\n处理完的新链接: ${new_url}`,
-                );
-                artifact.url = new_url;
-            }
-        }
 
         $.write(allArtifacts, ARTIFACTS_KEY);
         $.info('上传配置成功');
@@ -241,13 +226,13 @@ async function doSync() {
         if (invalid.length > 0) {
             $.notify(
                 '🌍 Sub-Store',
-                `同步配置成功 ${valid.length} 个, 失败 ${invalid.length} 个, 详情请查看日志`,
+                `同步配置成功 ${uploaded.length} 个, 失败 ${invalid.length} 个, 详情请查看日志`,
             );
-        } else {
+        } else if (syncSuccessNotify) {
             $.notify('🌍 Sub-Store', '同步配置完成');
         }
     } catch (e) {
         $.notify('🌍 Sub-Store', '同步配置失败', `原因：${e.message ?? e}`);
-        $.error(`无法同步配置到 Gist，原因：${e}`);
+        $.error(`无法同步配置到 Gist，原因：${e.stack ?? e.message ?? e}`);
     }
 }

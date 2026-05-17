@@ -348,7 +348,7 @@ export default async function download(
                 }
             }
             if (shouldCache) {
-                console.log($arguments);
+                // console.log($arguments);
                 resourceCache.set(
                     id,
                     body,
@@ -392,6 +392,7 @@ export default async function download(
                     undefined,
                     proxy,
                     $arguments.flowUrl,
+                    $arguments.flowHeaders,
                 ),
             ),
         );

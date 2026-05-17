@@ -5,11 +5,10 @@ function operator(proxies = [], targetPlatform, context) {
 
   // proxies 为传入的内部节点数组
   // 可在预览界面点击节点查看 JSON 结构 或查看 `target=JSON` 的通用订阅
-  // 0. 结构大致参考了 Clash.Meta(mihomo), 可参考 mihomo 的文档, 例如 `xudp`, `smux` 都可以自己设置. 但是有私货, 下面是我能想起来的一些私货. 顺便说一下, 关于 mihomo 不支持的协议, 其实也可以用 JSON/JSON5/YAML 格式来输入, 写法可参考使用 includeUnsupportedProxy 参数或开启 包含官方/商店版不支持的协议 开关时的 mihomo 输出内容, 例如 NaiveProxy 输入写法 (https://t.me/zhetengsha/4308)
-  // 1. `_no-resolve` 为不解析域名
-  // 2. 域名解析后 会多一个 `_resolved` 字段, 表示是否解析成功
-  // 3. 域名解析后会有`_IPv4`, `_IPv6`, `_IP`(若有多个步骤, 只取第一次成功的 v4 或 v6 数据), `_IP4P`(若解析类型为 IPv6 且符合 IP4P 类型, 将自动转换), `_domain` 字段, `_resolved_ips` 为解析出的所有 IP
-  // 4. 节点字段 _exec 为 mihomo 路径, 默认 /usr/local/bin/mihomo; 节点字段 _localPort 端口为初始端口号, 逐个递减, 默认为 65535. _defaultNameserver(默认为 [ '180.76.76.76', '52.80.52.52', '119.28.28.28', '223.6.6.6' ]) 和 _nameserver (默认为 [ 'https://doh.pub/dns-query', 'https://dns.alidns.com/dns-query', 'https://doh-pure.onedns.net/dns-query' ]) 为数组 用于自定义mihomo 的 default-nameserver 和 nameserver, 这个是配置 Surge for macOS 必须手动指定链接参数 target=SurgeMac 或在 同步配置 中指定 SurgeMac 来启用 mihomo 支援 Surge 本身不支持的协议. 详见 https://t.me/zhetengsha/1735
+  // 1. 结构大致参考了 Clash.Meta(mihomo), 可参考 mihomo 的文档, 例如 `xudp`, `smux` 都可以自己设置. 但是有私货, 下面是我能想起来的一些私货. 顺便说一下, 关于 mihomo 不支持的协议, 其实也可以用 JSON/JSON5/YAML 格式来输入, 写法可参考使用 includeUnsupportedProxy 参数或开启 包含官方/商店版不支持的协议 开关时的 mihomo 输出内容, 例如 NaiveProxy 输入写法 (https://t.me/zhetengsha/4308)
+  // 2. `_no-resolve` 为不解析域名
+  // 3. 域名解析后 会多一个 `_resolved` 字段, 表示是否解析成功
+  // 4. 域名解析后会有`_IPv4`, `_IPv6`, `_IP`(若有多个步骤, 只取第一次成功的 v4 或 v6 数据), `_IP4P`(若解析类型为 IPv6 且符合 IP4P 类型, 将自动转换), `_domain` 字段, `_resolved_ips` 为解析出的所有 IP
   // 5. `_subName` 为单条订阅名, `_subDisplayName` 为单条订阅显示名
   // 6. `_collectionName` 为组合订阅名, `_collectionDisplayName` 为组合订阅显示名
   // 7. `tls-fingerprint` 为 tls 指纹
@@ -28,17 +27,27 @@ function operator(proxies = [], targetPlatform, context) {
   // 14. `ports` 为端口跳跃, `hop-interval` 变换端口号的时间间隔
   // 15. `ip-version` 设置节点使用 IP 版本，兼容各家的值. 会进行内部转换. sing-box 以外: 若无法匹配则使用原始值. sing-box: 需有匹配且节点上设置 `_dns_server` 字段, 将自动设置 `domain_resolver.server`. 同时, `sing-box` 支持使用完整的 `_domain_resolver` 结构设置 `domain_resolver` 字段
   // 16. `sing-box` 支持使用 `_network` 来设置 `network`, 例如 `tcp`, `udp`
+  //    仅对 sing-box 源码里有 `network` 字段的协议生效: `ss`, `ssr`, `socks5`, `vmess`, `vless`, `trojan`, `hysteria`, `hysteria2`, `tuic`.
+  //    注意: mihomo 风格的 `udp: true` 表示节点支持 UDP, 不会转换成 sing-box 的 `network: "udp"`; sing-box 默认就是 TCP+UDP. `udp: false` 会转换成 `network: "tcp"`. `_network` 是显式覆盖, 优先级高于 `udp`.
   // 17. `block-quic` 支持 `auto`, `on`, `off`. 不同的平台不一定都支持, 会自动转换
   // 18. `sing-box` 支持 `_fragment`, `_fragment_fallback_delay`, `_record_fragment` 设置 `tls` 的 `fragment`, `fragment_fallback_delay`, `record_fragment`
   // 19. `sing-box` 支持 `_certificate`, `_certificate_path`, `_certificate_public_key_sha256`, `_client_certificate`, `_client_certificate_path`, `_client_key`, `_client_key_path` 设置 `tls` 的 `certificate`, `certificate_path`, `certificate_public_key_sha256`, `client_certificate`, `client_certificate_path`, `client_key`, `client_key_path`
-  // 20. `sing-box` 支持使用完整的 `_ech` 结构设置 `tls` 的 `ech`. 避免冲突, URI 里的改为 _echConfigList
-  // 21. 2.21.59 开始, `sing-box` 支持使用 `ech-opts` 结构设置 `tls` 的 `ech`. 参考 https://github.com/sub-store-org/Sub-Store/pull/563/changes 基本沿用 mihomo 风格, mihomo 部分字段自动转换
+  // 20. `sing-box` 支持使用完整的 `_ech` 结构设置 `tls` 的 `ech`. 避免冲突, URI 里的原始 `ech` 参数会保存在 `_echConfigList`
+  // 21. 2.21.59 开始, `sing-box` 支持使用 `ech-opts` 结构设置 `tls` 的 `ech`. 参考 https://github.com/sub-store-org/Sub-Store/pull/563/changes 基本沿用 mihomo 风格, mihomo 部分字段自动转换. URI `ech` 与 mihomo `ech-opts` 会互转: base64 ECHConfigList 使用 `ech-opts.config`; Xray 的 DNS server 写法(如 `https://1.1.1.1/dns-query` 或 `example.com+https://1.1.1.1/dns-query`)会把 DNS server 放到 `ech-opts._dns`, 显式查询域名放到 `ech-opts.query-server-name`. mihomo 不支持在 ech-opts 中配置 ECH DNS. 如需跟节点 ECH 配置一致, 请在 mihomo 配置文件里设置, 可参考: `dns["nameserver-policy"]["cloudflare-ech.com"] = ["https://dns.alidns.com/dns-query"]` . 反向输出 URI 时, 可设置 `ech-opts._dns` 来拼回 `ech`; 如果只设置 `query-server-name` 且未设置 `_dns`, 默认使用 `https://dns.alidns.com/dns-query` 并输出 warn 日志, 自定义 root DNS 请设置 `ech-opts._dns`. XHTTP `download-settings` 里嵌套的 TLS ECH 同样支持, 其中 `echForceQuery`/`echSockopt` 分别对应 `ech-opts._force-query`/`ech-opts._sockopt`, 嵌套 DNS 可设置 `xhttp-opts.download-settings.ech-opts._dns`
   // 22. `sing-box` 支持使用完整的 `_curve_preferences` 结构设置 `tls` 的 `curve_preferences`
   // 23. `interface-name` 指定流量出站接口 只给 Surge 用的话, `interface` 也可以
-  // 24. Surge for macOS 可手动指定链接参数 target=SurgeMac 或在 同步配置 中指定 SurgeMac 来启用 mihomo 支援 Surge 本身不支持的协议. 设置节点字段 `_mihomoExternal` 为 `true` 可强制指定使用 mihomo External Proxy Program 输出该节点
+  // 24. Surge for macOS 可手动指定链接参数 target=SurgeMac 或在 同步配置 中指定 SurgeMac 来启用 mihomo 支援 Surge 本身不支持的协议, 详见 https://t.me/zhetengsha/1735 . 设置节点字段 `_mihomoExternal` 为 `true` 可强制指定使用 mihomo External Proxy Program 输出该节点. 节点字段 _exec 为 mihomo 路径, 默认 /usr/local/bin/mihomo; 节点字段 _localPort 端口为初始端口号, 逐个递减, 默认为 65535. _merge 为开启仅一个 mihomo 进程+多个 listeners 的模式, 此时仅有一个 mihomo External Proxy Program, 节点会转成 SOCKS5, _mergeName 可设置这个 mihomo 节点的名字(默认为 mihomo merged); _config 对象可覆盖默认配置, _defaultNameserver(默认为 [ '180.76.76.76', '52.80.52.52', '119.28.28.28', '223.6.6.6' ]) 和 _nameserver (默认为 [ 'https://doh.pub/dns-query', 'https://dns.alidns.com/dns-query', 'https://doh-pure.onedns.net/dns-query' ]) 为数组 用于自定义 mihomo 的 default-nameserver 和 nameserver
   // 25. VLESS xhttp URI 的 extra 默认会拆成两部分处理: mihomo 已支持的字段会解析到节点的结构化字段并在输出 URI 时重新组装; extra 里 mihomo 还不支持的字段只会保存在 `_extra_unsupported` 对象里. 输出 URI 时会用“当前结构化字段 + _extra_unsupported”一起构造 extra, 这样既不会让旧 raw extra 覆盖后来修改过的 mihomo 字段, 也能避免 VLESS URI -> VLESS URI 的流程里把暂不支持的 extra 字段丢掉. 但如果节点上显式设置了 `_extra`, 且它是字符串或普通对象, 那么输出 URI 时 extra 会直接使用 `_extra` (对象会自动转成 JSON 字符串), 不再重组结构化字段. 这是为了方便手动自定义 extra, 不用再一个个同步那些本来会影响 extra 的其它字段
+  // 修改/设置 extra 举例:
+  // 如果是你写的全是 mihomo 已经支持的格式 就直接按 mihomo 的设置
+  // 比如
+  // `$server['xhttp-opts']['download-settings'] = {}`
+  // 如果有 mihomo 不支持的字段可以手动设到 `_extra_unsupported` 字段里, 会自动重组
+  // 如果你是 xray -> xray 用, 可以直接设置 `$server._extra = { }` 或 `$server._extra = ""`
   // 26. `_qx_obfs_http` 为 QX 的 http obfs 原始值, 例如 `http`, `vmess-http`, `vemss-http`, `shadowsocks-http`, 用于 QX 输入输出时保留原始写法. `vemss-http` 应该是 huaqian 的 typo, 没测过, 反正也支持, 报错就自己改成 `vmess-http` 吧
   // 27. WireGuard 支持 `ip-cidr`(IPv4 前缀长度) 和 `ipv6-cidr`(IPv6 前缀长度) 字段: 内部会保存前缀长度, 若未设置则默认分别为 `32` 和 `128`. 输出到 `mihomo`/`Shadowrocket`/`sing-box`/`URI` 时会带上该后缀
+  // 28. sing-box 1.14.0 起才有 `control_http_client` , 暂时可使用 `control-http-client` 字段设置 sing-box 的 `control_http_client`
+  //     若 `control-http-client` 非空, 输出 sing-box Tailscale endpoint 时会跳过旧版拨号字段映射, 避免和 `detour`/`dialer-proxy` 等 legacy dialer options 冲突. 需要给控制面设置前置代理时, 请写到 `control-http-client.detour`
 
   // require 为 Node.js 的 require, 在 Node.js 运行环境下 可以用来引入模块
   // 例如在 Node.js 环境下, 将文件内容写入 /tmp/1.txt 文件
@@ -67,6 +76,9 @@ function operator(proxies = [], targetPlatform, context) {
   //     params,
   //     headers,
   //     body,
+  //     scoket: {
+  //         remoteAddress
+  //     }
   // }
   // console.log($options)
 
@@ -122,6 +134,7 @@ function operator(proxies = [], targetPlatform, context) {
   // $.info(statusCode)
   // $.info(body)
   // const obj = JSON.parse(body)
+
   // scriptResourceCache 缓存
   // 可参考 https://t.me/zhetengsha/1003
   // const cache = scriptResourceCache
@@ -166,6 +179,8 @@ function operator(proxies = [], targetPlatform, context) {
   // async function operator() {
   //     scriptResourceCache._cleanup(undefined, 1 * 3600 * 1000);
   // }
+
+  // DOMAIN_RESOLVERS 为内置域名解析, 详见 backend/src/core/proxy-utils/processors/index.js
 
   // ProxyUtils 为节点处理工具
   // 可参考 https://t.me/zhetengsha/1066
@@ -289,6 +304,9 @@ function operator(proxies = [], targetPlatform, context) {
   // yaml.proxies.unshift(...clashMetaProxies)
   // $content = ProxyUtils.yaml.dump(yaml)
 
+  // 一个 Base64 编码的例子:
+  // $content = ProxyUtils.Base64.encode($content ?? $files[0])
+
   // { $content, $files, $options } will be passed to the next operator
   // $content is the final content of the file
 
@@ -394,6 +412,12 @@ function operator(proxies = [], targetPlatform, context) {
   //   "backend": "Node",
   //   "version": "2.14.198"
   // }
+
+  // 脚本中使用日志 可以参考这个格式 能在前端日志查看里区分识别
+  // console.log(`[SCOPE] LOG: 信息`)
+  // console.log(`[SCOPE] INFO: 信息`)
+  // console.log(`[SCOPE] WARN: 警告`)
+  // console.log(`[SCOPE] ERROR: 错误`)
 
   // 参数说明
   // 可参考 https://github.com/sub-store-org/Sub-Store/wiki/%E9%93%BE%E6%8E%A5%E5%8F%82%E6%95%B0%E8%AF%B4%E6%98%8E

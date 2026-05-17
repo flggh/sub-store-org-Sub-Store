@@ -21,6 +21,23 @@ import {
 import Gist from '@/utils/gist';
 import { archiveArtifact } from '@/utils/archive';
 
+const ARTIFACT_GIST_PLACEHOLDER_FILENAME = '.sub-store-placeholder';
+const ARTIFACT_GIST_PLACEHOLDER_CONTENT = [
+    'Sub-Store placeholder',
+    'This file keeps the Gist alive when all sync configuration files are deleted.',
+].join('\n');
+const DEFAULT_ARTIFACT_SYNC_BATCH_SIZE = 10;
+
+function normalizeArtifactSyncBatchSize(value) {
+    const batchSize = Math.floor(Number(value));
+
+    if (!isFinite(batchSize) || batchSize <= 0) {
+        return DEFAULT_ARTIFACT_SYNC_BATCH_SIZE;
+    }
+
+    return batchSize;
+}
+
 export default function register($app) {
     // Initialization
     if (!$.read(ARTIFACTS_KEY)) $.write({}, ARTIFACTS_KEY);
@@ -62,6 +79,10 @@ async function restoreArtifacts(_, res) {
             Object.keys(gist.files).map((key) => {
                 const filename = gist.files[key]?.filename;
                 if (filename) {
+                    if (isArtifactGistPlaceholder(filename)) {
+                        $.info(`忽略 Gist 占位文件: ${filename}`);
+                        return;
+                    }
                     if (encodeURIComponent(filename) !== filename) {
                         $.error(`文件名 ${filename} 未编码 不保存`);
                         failed.push(filename);
@@ -188,8 +209,8 @@ async function deleteArtifact(req, res) {
         if (shouldArchiveDeletion(req.query.mode)) {
             archiveArtifact(name);
         }
-        await deleteArtifactItem(name);
-        success(res);
+        const result = await deleteArtifactItem(name);
+        success(res, result);
     } catch (err) {
         $.error(`无法删除远程配置：${req.params.name}，原因：${err}`);
         failed(
@@ -208,7 +229,10 @@ async function deleteArtifact(req, res) {
 }
 
 function validateArtifactName(name) {
-    return /^[a-zA-Z0-9._-]*$/.test(name);
+    return (
+        /^[a-zA-Z0-9._-]*$/.test(name) &&
+        !isArtifactGistPlaceholder(name)
+    );
 }
 
 function createArtifactItem(artifact) {
@@ -241,6 +265,10 @@ async function deleteArtifactItem(name) {
             `Artifact ${name} does not exist!`,
         );
     }
+    const remote = {
+        attempted: false,
+        status: 'not_attempted',
+    };
     if (artifact.updated) {
         const files = {};
         files[encodeURIComponent(artifact.name)] = {
@@ -251,15 +279,30 @@ async function deleteArtifactItem(name) {
                 content: '',
             };
         }
+        remote.attempted = true;
         try {
-            await syncToGist(files);
+            const resp = await syncToGist(files);
+            const fallback = resp.subStoreUploadMeta?.emptyFileFallback;
+            remote.status =
+                fallback?.status === 'created' ||
+                fallback?.status === 'retained'
+                    ? 'placeholder_retained'
+                    : 'deleted';
+            if (fallback?.filename) {
+                remote.placeholderFilename = fallback.filename;
+            }
         } catch (error) {
+            remote.status = 'failed';
+            remote.message = `${error.message ?? error}`;
             $.error(`Function syncToGist: ${name} : ${error}`);
         }
     }
     deleteByName(allArtifacts, name);
     $.write(allArtifacts, ARTIFACTS_KEY);
-    return artifact;
+    return {
+        artifact,
+        remote,
+    };
 }
 
 function shouldArchiveDeletion(mode) {
@@ -275,17 +318,54 @@ function shouldArchiveDeletion(mode) {
     );
 }
 
-async function syncToGist(files) {
+function isArtifactGistPlaceholder(name) {
+    return name === ARTIFACT_GIST_PLACEHOLDER_FILENAME;
+}
+
+function getArtifactGistEmptyFileFallback() {
+    return {
+        filename: ARTIFACT_GIST_PLACEHOLDER_FILENAME,
+        content: ARTIFACT_GIST_PLACEHOLDER_CONTENT,
+    };
+}
+
+async function syncToGist(files, options = {}) {
     const { gistToken, syncPlatform } = $.read(SETTINGS_KEY);
     if (!gistToken) {
         return Promise.reject('未设置 GitHub Token！');
     }
+    const uploadSummary = summarizeGistUploadFiles(files);
+    $.info(
+        `准备同步 Gist: 文件数 ${uploadSummary.count}, 总大小 ${formatBytes(
+            uploadSummary.totalBytes,
+        )}, 最大文件 ${
+            uploadSummary.largestFilename || '-'
+        } (${formatBytes(uploadSummary.largestBytes)})`,
+    );
     const manager = new Gist({
         token: gistToken,
         key: ARTIFACT_REPOSITORY_KEY,
         syncPlatform,
     });
-    const res = await manager.upload(files);
+    let res;
+    try {
+        res = await manager.upload(files, {
+            ...options,
+            emptyFileFallback:
+                options.emptyFileFallback ?? getArtifactGistEmptyFileFallback(),
+        });
+    } catch (error) {
+        $.error(
+            `同步 Gist 请求失败: 文件数 ${uploadSummary.count}, 总大小 ${formatBytes(
+                uploadSummary.totalBytes,
+            )}, 最大文件 ${
+                uploadSummary.largestFilename || '-'
+            } (${formatBytes(uploadSummary.largestBytes)}), 原因: ${
+                error.message ?? error
+            }`,
+        );
+        throw error;
+    }
     let body = {};
     try {
         body = JSON.parse(res.body);
@@ -306,5 +386,41 @@ async function syncToGist(files) {
     return res;
 }
 
-export { syncToGist };
+function summarizeGistUploadFiles(files) {
+    return Object.entries(files || {}).reduce(
+        (summary, [filename, file]) => {
+            const content = file?.content;
+            if (typeof content !== 'string') return summary;
+            const bytes = stringByteLength(content);
+            summary.count++;
+            summary.totalBytes += bytes;
+            if (bytes > summary.largestBytes) {
+                summary.largestBytes = bytes;
+                summary.largestFilename = filename;
+            }
+            return summary;
+        },
+        {
+            count: 0,
+            totalBytes: 0,
+            largestBytes: 0,
+            largestFilename: '',
+        },
+    );
+}
+
+function stringByteLength(value) {
+    if (typeof TextEncoder !== 'undefined') {
+        return new TextEncoder().encode(value).length;
+    }
+    return unescape(encodeURIComponent(value)).length;
+}
+
+function formatBytes(size) {
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export { syncToGist, normalizeArtifactSyncBatchSize };
 export { createArtifactItem, deleteArtifactItem };

@@ -525,6 +525,67 @@ function parseIP4P(IP4P) {
     return { server, port };
 }
 
+const DEFAULT_RESOLVE_DOMAIN_CONCURRENCY = 15;
+const RESOLVE_DOMAIN_CONCURRENCY_WARN_THRESHOLD = 20;
+
+function normalizeResolveDomainConcurrency(concurrency) {
+    if (
+        typeof concurrency === 'undefined' ||
+        concurrency === null ||
+        (typeof concurrency === 'string' && concurrency.trim() === '')
+    ) {
+        return DEFAULT_RESOLVE_DOMAIN_CONCURRENCY;
+    }
+
+    const parsed = Number(concurrency);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+        throw new Error('域名解析并发数应为大于 0 的整数');
+    }
+
+    return parsed;
+}
+
+async function resolveDomainsWithConcurrency(
+    domains,
+    concurrency,
+    resolveDomain,
+) {
+    let nextIndex = 0;
+    const workerCount = Math.min(concurrency, domains.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+        while (nextIndex < domains.length) {
+            const domain = domains[nextIndex];
+            nextIndex += 1;
+            await resolveDomain(domain);
+        }
+    });
+
+    await Promise.all(workers);
+}
+
+function getDomainResolverCacheId(provider, domain, type, url) {
+    switch (provider) {
+        case 'Custom':
+            return hex_md5(`CUSTOM:${url}:${domain}:${type}`);
+        case 'Google':
+            return hex_md5(`GOOGLE:${domain}:${type}`);
+        case 'IP-API':
+            return hex_md5(`IP-API:${domain}`);
+        case 'Cloudflare':
+            return hex_md5(`CLOUDFLARE:${domain}:${type}`);
+        case 'Ali':
+            return hex_md5(`ALI:${domain}:${type}`);
+        case 'Tencent':
+            return hex_md5(`TENCENT:${domain}:${type}`);
+    }
+}
+
+function getCachedDomainResolverResult(provider, domain, type, cache, url) {
+    if (cache === 'disabled') return null;
+    const id = getDomainResolverCacheId(provider, domain, type, url);
+    return id ? resourceCache.get(id) : null;
+}
+
 const DOMAIN_RESOLVERS = {
     Custom: async function (domain, type, noCache, timeout, edns, url) {
         const id = hex_md5(`CUSTOM:${url}:${domain}:${type}`);
@@ -694,6 +755,7 @@ function ResolveDomainOperator({
     url,
     timeout,
     edns: _edns,
+    concurrency: _concurrency,
 }) {
     if (['IPv6', 'IP4P'].includes(_type) && ['IP-API'].includes(provider)) {
         throw new Error(`域名解析服务提供方 ${provider} 不支持 ${_type}`);
@@ -708,8 +770,16 @@ function ResolveDomainOperator({
     }
     let edns = _edns || '223.6.6.6';
     if (!isIP(edns)) throw new Error(`域名解析 EDNS 应为 IP`);
+    const concurrency = normalizeResolveDomainConcurrency(_concurrency);
+    if (concurrency > RESOLVE_DOMAIN_CONCURRENCY_WARN_THRESHOLD) {
+        $.warn(
+            `域名解析并发数 ${concurrency} 超过建议值 ${RESOLVE_DOMAIN_CONCURRENCY_WARN_THRESHOLD}, 可能导致代理 App TCP 连接数激增`,
+        );
+    }
     $.info(
-        `Domain Resolver: [${_type}] ${provider} ${edns || ''} ${url || ''}`,
+        `Domain Resolver: [${_type}] ${provider} ${edns || ''} ${
+            url || ''
+        } concurrency=${concurrency}`,
     );
     return {
         name: 'Resolve Domain Operator',
@@ -720,42 +790,55 @@ function ResolveDomainOperator({
                 }
             });
             const results = {};
-            const limit = 15; // more than 20 concurrency may result in surge TCP connection shortage.
-            const totalDomain = [
+            const domains = [
                 ...new Set(
                     proxies
                         .filter((p) => !isIP(p.server) && !p['_no-resolve'])
                         .map((c) => c.server),
                 ),
             ];
-            const totalBatch = Math.ceil(totalDomain.length / limit);
-            for (let i = 0; i < totalBatch; i++) {
-                const currentBatch = [];
-                for (let domain of totalDomain.splice(0, limit)) {
-                    currentBatch.push(
-                        resolver(
+            const domainsToResolve = [];
+            domains.forEach((domain) => {
+                const cached = getCachedDomainResolverResult(
+                    provider,
+                    domain,
+                    type,
+                    cache,
+                    url,
+                );
+                if (cached) {
+                    results[domain] = cached;
+                    $.info(
+                        `Using cached resolved domain: ${domain} ➟ ${cached}`,
+                    );
+                } else {
+                    domainsToResolve.push(domain);
+                }
+            });
+            await resolveDomainsWithConcurrency(
+                domainsToResolve,
+                concurrency,
+                async (domain) => {
+                    try {
+                        const ip = await resolver(
                             domain,
                             type,
                             cache === 'disabled',
                             requestTimeout,
                             edns,
                             url,
-                        )
-                            .then((ip) => {
-                                results[domain] = ip;
-                                $.info(
-                                    `Successfully resolved domain: ${domain} ➟ ${ip}`,
-                                );
-                            })
-                            .catch((err) => {
-                                $.error(
-                                    `Failed to resolve domain: ${domain} with resolver [${provider}]: ${err}`,
-                                );
-                            }),
-                    );
-                }
-                await Promise.all(currentBatch);
-            }
+                        );
+                        results[domain] = ip;
+                        $.info(
+                            `Successfully resolved domain: ${domain} ➟ ${ip}`,
+                        );
+                    } catch (err) {
+                        $.error(
+                            `Failed to resolve domain: ${domain} with resolver [${provider}]: ${err}`,
+                        );
+                    }
+                },
+            );
             proxies.forEach((p) => {
                 if (!p['_no-resolve']) {
                     if (results[p.server]) {
@@ -1172,6 +1255,7 @@ function createDynamicFunction(name, script, $arguments, $options) {
             'Buffer',
             'b64d',
             'b64e',
+            'DOMAIN_RESOLVERS',
             'scriptResourceCache',
             'flowUtils',
             'produceArtifact',
@@ -1193,6 +1277,7 @@ function createDynamicFunction(name, script, $arguments, $options) {
             ProxyUtils.Buffer,
             ProxyUtils.Base64.decode,
             ProxyUtils.Base64.encode,
+            DOMAIN_RESOLVERS,
             scriptResourceCache,
             flowUtils,
             produceArtifact,
@@ -1209,6 +1294,7 @@ function createDynamicFunction(name, script, $arguments, $options) {
             'Buffer',
             'b64d',
             'b64e',
+            'DOMAIN_RESOLVERS',
             'scriptResourceCache',
             'flowUtils',
             'produceArtifact',
@@ -1224,6 +1310,7 @@ function createDynamicFunction(name, script, $arguments, $options) {
             ProxyUtils.Buffer,
             ProxyUtils.Base64.decode,
             ProxyUtils.Base64.encode,
+            DOMAIN_RESOLVERS,
             scriptResourceCache,
             flowUtils,
             produceArtifact,
