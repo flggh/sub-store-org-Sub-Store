@@ -10,6 +10,7 @@ import {
     normalizeWebSocketEarlyDataPath,
 } from '../transport-path';
 import $ from '@/core/app';
+import { normalizeVmessSecurity } from '../vmess-security';
 
 export default function Shadowrocket_Producer() {
     const type = 'ALL';
@@ -27,16 +28,24 @@ export default function Shadowrocket_Producer() {
                     ])
                 ) {
                     return false;
-                } else if (proxy.type === 'snell' && proxy.version >= 4) {
+                } else if (
+                    proxy.type === 'snell' &&
+                    ![1, 2, 3, 4, 5].includes(proxy.version)
+                ) {
+                    return false;
+                } else if (hasShadowrocketSnellShadowTlsObfsConflict(proxy)) {
+                    $.error(
+                        `Platform Shadowrocket does not support Snell shadow-tls with obfs for proxy ${proxy.name}. Proxy has been filtered.`,
+                    );
                     return false;
                 } else if (
                     [
                         'tailscale',
                         'sudoku',
                         'naive',
-                        'masque',
                         'openvpn',
                         'gost-relay',
+                        'shadowquic',
                     ].includes(proxy.type)
                 ) {
                     return false;
@@ -63,18 +72,7 @@ export default function Shadowrocket_Producer() {
                     }
                     // https://github.com/MetaCubeX/Clash.Meta/blob/Alpha/docs/config.yaml#L400
                     // https://stash.wiki/proxy-protocols/proxy-types#vmess
-                    if (
-                        isPresent(proxy, 'cipher') &&
-                        ![
-                            'auto',
-                            'none',
-                            'zero',
-                            'aes-128-gcm',
-                            'chacha20-poly1305',
-                        ].includes(proxy.cipher)
-                    ) {
-                        proxy.cipher = 'auto';
-                    }
+                    proxy.cipher = normalizeVmessSecurity(proxy.cipher);
                 } else if (proxy.type === 'tuic') {
                     if (isPresent(proxy, 'alpn')) {
                         proxy.alpn = Array.isArray(proxy.alpn)
@@ -142,28 +140,29 @@ export default function Shadowrocket_Producer() {
                     proxy['pre-shared-key'] = proxy['preshared-key'];
                     proxy.ip = getWireGuardAddressWithCIDR(proxy, 'ipv4');
                     proxy.ipv6 = getWireGuardAddressWithCIDR(proxy, 'ipv6');
-                } else if (proxy.type === 'snell' && proxy.version < 3) {
-                    delete proxy.udp;
+                } else if (proxy.type === 'snell') {
+                    if (proxy.version < 3) {
+                        delete proxy.udp;
+                    }
+                    if (proxy.plugin === 'shadow-tls' && proxy['plugin-opts']) {
+                        proxy['obfs-opts'] = {
+                            mode: 'shadow-tls',
+                            host: proxy['plugin-opts'].host,
+                            password: proxy['plugin-opts'].password,
+                            version: proxy['plugin-opts'].version,
+                        };
+                        if (proxy['plugin-opts'].alpn) {
+                            proxy['obfs-opts'].alpn = proxy['plugin-opts'].alpn;
+                        }
+                        delete proxy.plugin;
+                        delete proxy['plugin-opts'];
+                    }
                 } else if (proxy.type === 'vless') {
                     if (isPresent(proxy, 'sni')) {
                         proxy.servername = proxy.sni;
                         delete proxy.sni;
                     }
                 } else if (proxy.type === 'ss') {
-                    if (
-                        isPresent(proxy, 'shadow-tls-password') &&
-                        !isPresent(proxy, 'plugin')
-                    ) {
-                        proxy.plugin = 'shadow-tls';
-                        proxy['plugin-opts'] = {
-                            host: proxy['shadow-tls-sni'],
-                            password: proxy['shadow-tls-password'],
-                            version: proxy['shadow-tls-version'],
-                        };
-                        delete proxy['shadow-tls-password'];
-                        delete proxy['shadow-tls-sni'];
-                        delete proxy['shadow-tls-version'];
-                    }
                     if (isShadowsocksOverTls(proxy)) {
                         if (isPresent(proxy, 'sni')) {
                             proxy.servername = proxy.sni;
@@ -171,6 +170,13 @@ export default function Shadowrocket_Producer() {
                             // delete proxy.sni;
                         }
                     }
+                } else if (
+                    ['anytls'].includes(proxy.type) &&
+                    proxy.reuse != null &&
+                    !proxy.reuse
+                ) {
+                    proxy['disable-reuse'] = true;
+                    delete proxy.reuse;
                 }
 
                 if (
@@ -203,12 +209,27 @@ export default function Shadowrocket_Producer() {
                     ) {
                         proxy['h2-opts'].path = path[0];
                     }
-                    let host = proxy['h2-opts']?.headers?.host;
+                    let host =
+                        proxy['h2-opts']?.host ??
+                        proxy['h2-opts']?.headers?.host ??
+                        proxy['h2-opts']?.headers?.Host;
                     if (
-                        isPresent(proxy, 'h2-opts.headers.host') &&
-                        !Array.isArray(host)
+                        isPresent(proxy, 'h2-opts.host') ||
+                        isPresent(proxy, 'h2-opts.headers.host') ||
+                        isPresent(proxy, 'h2-opts.headers.Host')
                     ) {
-                        proxy['h2-opts'].headers.host = [host];
+                        proxy['h2-opts'].host = Array.isArray(host)
+                            ? host
+                            : [host];
+                    }
+                    if (proxy['h2-opts']?.headers) {
+                        delete proxy['h2-opts'].headers.host;
+                        delete proxy['h2-opts'].headers.Host;
+                        if (
+                            Object.keys(proxy['h2-opts'].headers).length === 0
+                        ) {
+                            delete proxy['h2-opts'].headers;
+                        }
                     }
                 }
                 if (['ws'].includes(proxy.network)) {
@@ -284,4 +305,14 @@ export default function Shadowrocket_Producer() {
         return produceProxyListOutput(list, type, opts);
     };
     return { type, produce };
+}
+
+function hasShadowrocketSnellShadowTlsObfsConflict(proxy) {
+    return (
+        proxy?.type === 'snell' &&
+        proxy?.plugin === 'shadow-tls' &&
+        (isPresent(proxy, 'obfs-opts.mode') ||
+            isPresent(proxy, 'obfs-opts.host') ||
+            isPresent(proxy, 'obfs-opts.path'))
+    );
 }

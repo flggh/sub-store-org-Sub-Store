@@ -2,6 +2,7 @@ import {
     isPresent,
     produceProxyListOutput,
 } from '@/core/proxy-utils/producers/utils';
+import { normalizeClashVmessSecurity } from '../vmess-security';
 import {
     deleteHttpUpgradeEarlyDataMetadata,
     normalizeWebSocketEarlyDataPath,
@@ -81,17 +82,7 @@ export default function Clash_Producer() {
                         delete proxy.sni;
                     }
                     // https://dreamacro.github.io/clash/configuration/outbound.html#vmess
-                    if (
-                        isPresent(proxy, 'cipher') &&
-                        ![
-                            'auto',
-                            'aes-128-gcm',
-                            'chacha20-poly1305',
-                            'none',
-                        ].includes(proxy.cipher)
-                    ) {
-                        proxy.cipher = 'auto';
-                    }
+                    proxy.cipher = normalizeClashVmessSecurity(proxy.cipher);
                 } else if (proxy.type === 'wireguard') {
                     proxy.keepalive =
                         proxy.keepalive ?? proxy['persistent-keepalive'];
@@ -138,12 +129,27 @@ export default function Clash_Producer() {
                     ) {
                         proxy['h2-opts'].path = path[0];
                     }
-                    let host = proxy['h2-opts']?.headers?.host;
+                    let host =
+                        proxy['h2-opts']?.host ??
+                        proxy['h2-opts']?.headers?.host ??
+                        proxy['h2-opts']?.headers?.Host;
                     if (
-                        isPresent(proxy, 'h2-opts.headers.host') &&
-                        !Array.isArray(host)
+                        (isPresent(proxy, 'h2-opts.host') ||
+                            isPresent(proxy, 'h2-opts.headers.host') ||
+                            isPresent(proxy, 'h2-opts.headers.Host'))
                     ) {
-                        proxy['h2-opts'].headers.host = [host];
+                        proxy['h2-opts'].host = Array.isArray(host)
+                            ? host
+                            : [host];
+                    }
+                    if (proxy['h2-opts']?.headers) {
+                        delete proxy['h2-opts'].headers.host;
+                        delete proxy['h2-opts'].headers.Host;
+                        if (
+                            Object.keys(proxy['h2-opts'].headers).length === 0
+                        ) {
+                            delete proxy['h2-opts'].headers;
+                        }
                     }
                 }
                 if (['ws'].includes(proxy.network)) {

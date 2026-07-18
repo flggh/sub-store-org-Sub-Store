@@ -52,7 +52,9 @@ describe('Proxy parser pipeline coverage', function () {
             ],
         };
 
-        const proxy = parseOne(`ssd://${Base64.encode(JSON.stringify(payload))}`);
+        const proxy = parseOne(
+            `ssd://${Base64.encode(JSON.stringify(payload))}`,
+        );
 
         expectSubset(proxy, {
             type: 'ss',
@@ -162,6 +164,25 @@ FINAL,DIRECT
         });
     });
 
+    it('defaults invalid VMess cipher to auto for Clash-style object inputs', function () {
+        const proxy = parseOne(
+            JSON.stringify({
+                name: 'vmess-invalid-cipher',
+                type: 'vmess',
+                server: 'vmess.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'aes-128-ctr',
+            }),
+        );
+
+        expectSubset(proxy, {
+            type: 'vmess',
+            name: 'vmess-invalid-cipher',
+            cipher: 'auto',
+        });
+    });
+
     it('drops invalid mihomo hop-interval values for Clash-style object inputs', function () {
         const invalidHopIntervals = [
             { title: 'zero string', value: '0' },
@@ -200,6 +221,26 @@ FINAL,DIRECT
             expect(proxy).to.not.have.property('hop-interval');
             expect(proxy).to.not.have.property('hop-interval-max');
         }
+    });
+
+    it('prefers xudp over packet-addr when normalizing legacy packet fields', function () {
+        const proxy = parseOne(
+            JSON.stringify({
+                name: 'vless-legacy-packet-conflict',
+                type: 'vless',
+                server: 'vless.example.com',
+                port: 443,
+                uuid: UUID,
+                xudp: true,
+                'packet-addr': true,
+            }),
+        );
+
+        expectSubset(proxy, {
+            type: 'vless',
+            name: 'vless-legacy-packet-conflict',
+            'packet-encoding': 'xudp',
+        });
     });
 
     it('accepts every Clash-supported proxy type as inline objects', function () {

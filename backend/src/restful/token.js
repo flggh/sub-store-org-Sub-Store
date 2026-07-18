@@ -10,6 +10,7 @@ import {
 import { insertByPosition } from '@/utils/database';
 import { getCreateItemPosition } from '@/utils/create-item-position';
 import { archiveShare } from '@/utils/archive';
+import { normalizeAgePublicKeyConfig } from '@/utils/age';
 
 export default function register($app) {
     if (!$.read(TOKENS_KEY)) $.write([], TOKENS_KEY);
@@ -91,7 +92,7 @@ function normalizeExpirationMode(mode) {
     if (mode == null || mode === '') {
         return undefined;
     }
-    if (mode === 'duration' || mode === 'datetime') {
+    if (mode === 'duration' || mode === 'datetime' || mode === 'count') {
         return mode;
     }
     throw new RequestInvalidError(
@@ -167,7 +168,92 @@ function resolveDurationExpiration(options = {}, { required = false } = {}) {
 
     return {
         rawExpiresIn,
+        expiresIn,
         exp: Date.now() + expiresIn,
+    };
+}
+
+const DURATION_INPUT_UNIT_MS = {
+    day: 24 * 60 * 60 * 1000,
+    month: 30 * 24 * 60 * 60 * 1000,
+    season: 90 * 24 * 60 * 60 * 1000,
+    year: 365 * 24 * 60 * 60 * 1000,
+};
+
+function resolveDurationInput(options = {}, durationExpiration) {
+    const rawExpiresValue = options?.expiresValue;
+    const rawExpiresUnit = options?.expiresUnit;
+    const hasExpiresValue = rawExpiresValue != null && rawExpiresValue !== '';
+    const hasExpiresUnit = rawExpiresUnit != null && rawExpiresUnit !== '';
+    if (!hasExpiresValue && !hasExpiresUnit) {
+        return null;
+    }
+
+    const expiresValue = Number(rawExpiresValue);
+    if (!Number.isFinite(expiresValue) || expiresValue <= 0) {
+        throw new RequestInvalidError(
+            'INVALID_EXPIRES_VALUE',
+            `Invalid expiresValue option: ${rawExpiresValue}`,
+        );
+    }
+
+    const expiresUnit =
+        typeof rawExpiresUnit === 'string' ? rawExpiresUnit.trim() : '';
+    if (!['day', 'month', 'season', 'year'].includes(expiresUnit)) {
+        throw new RequestInvalidError(
+            'INVALID_EXPIRES_UNIT',
+            `Invalid expiresUnit option: ${rawExpiresUnit}`,
+        );
+    }
+
+    const normalizedExpiresValue = Number(expiresValue.toFixed(2));
+    const expectedExpiresIn =
+        normalizedExpiresValue * DURATION_INPUT_UNIT_MS[expiresUnit];
+    if (
+        durationExpiration &&
+        Math.abs(durationExpiration.expiresIn - expectedExpiresIn) > 1
+    ) {
+        throw new RequestInvalidError(
+            'INVALID_DURATION_INPUT',
+            `expiresValue/expiresUnit do not match expiresIn option: ${rawExpiresValue}${expiresUnit} != ${options?.expiresIn}`,
+        );
+    }
+
+    return {
+        expiresValue: String(normalizedExpiresValue),
+        expiresUnit,
+    };
+}
+
+function resolveCountExpiration(options = {}) {
+    const rawCount = options?.count;
+    if (rawCount == null || rawCount === '') {
+        throw new RequestInvalidError(
+            'INVALID_SHARE_COUNT',
+            `Invalid count option: ${rawCount}`,
+        );
+    }
+
+    const count = Number(rawCount);
+    if (!Number.isSafeInteger(count) || count <= 0) {
+        throw new RequestInvalidError(
+            'INVALID_SHARE_COUNT',
+            `Invalid count option: ${rawCount}`,
+        );
+    }
+
+    const rawUsedCount = options?.usedCount ?? 0;
+    const usedCount = Number(rawUsedCount);
+    if (!Number.isSafeInteger(usedCount) || usedCount < 0 || usedCount > count) {
+        throw new RequestInvalidError(
+            'INVALID_SHARE_USED_COUNT',
+            `Invalid usedCount option: ${rawUsedCount}`,
+        );
+    }
+
+    return {
+        count,
+        usedCount,
     };
 }
 
@@ -242,13 +328,20 @@ function createTokenItem(payload, options = {}) {
         normalizeExpirationMode(options?.mode) ??
         inferLegacyExpirationMode(options);
     let durationExpiration = null;
+    let durationInput = null;
     let exp;
+    let countExpiration = null;
     if (expirationMode === 'datetime') {
         exp = resolveExactExpiration(options);
+    } else if (expirationMode === 'count') {
+        countExpiration = resolveCountExpiration(options);
     } else {
         durationExpiration = resolveDurationExpiration(options, {
             required: expirationMode === 'duration',
         });
+        if (durationExpiration) {
+            durationInput = resolveDurationInput(options, durationExpiration);
+        }
         exp = durationExpiration?.exp;
     }
 
@@ -269,6 +362,8 @@ function createTokenItem(payload, options = {}) {
     const normalizedMode =
         expirationMode === 'datetime'
             ? 'datetime'
+            : expirationMode === 'count'
+              ? 'count'
             : durationExpiration
               ? 'duration'
               : undefined;
@@ -276,6 +371,11 @@ function createTokenItem(payload, options = {}) {
     delete safePayload.mode;
     delete safePayload.exp;
     delete safePayload.expiresIn;
+    delete safePayload.expiresValue;
+    delete safePayload.expiresUnit;
+    delete safePayload.count;
+    delete safePayload.usedCount;
+    normalizeAgePublicKeyConfig(safePayload);
     const tokenData = {
         ...safePayload,
         token,
@@ -283,9 +383,15 @@ function createTokenItem(payload, options = {}) {
         ...(normalizedMode ? { mode: normalizedMode } : {}),
         ...(normalizedMode === 'datetime'
             ? { exp }
+            : normalizedMode === 'count'
+              ? {
+                    count: countExpiration.count,
+                    usedCount: countExpiration.usedCount,
+                }
             : durationExpiration
               ? {
                     expiresIn: durationExpiration.rawExpiresIn,
+                    ...(durationInput || {}),
                     exp,
                 }
               : {}),
@@ -314,6 +420,70 @@ function deleteTokenItem(token, type, name) {
     return match;
 }
 
+function matchesShareToken(item, { token, type, name, pathname }) {
+    return (
+        item.token === token &&
+        (type ? item.type === type : true) &&
+        (name ? item.name === name : true) &&
+        (pathname
+            ? `/share/${item.type}/${item.name}` === pathname ||
+              pathname.startsWith(`/share/${item.type}/${item.name}/`)
+            : true)
+    );
+}
+
+function isShareTokenUsable(item) {
+    if (item.exp != null && item.exp <= Date.now()) {
+        return false;
+    }
+
+    if (item.mode === 'count') {
+        const count = Number(item.count);
+        const usedCount = item.usedCount == null ? 0 : Number(item.usedCount);
+        return (
+            Number.isSafeInteger(count) &&
+            count > 0 &&
+            Number.isSafeInteger(usedCount) &&
+            usedCount >= 0 &&
+            usedCount < count
+        );
+    }
+
+    return true;
+}
+
+function consumeShareToken(query) {
+    const allTokens = $.read(TOKENS_KEY) || [];
+    const tokenIndex = allTokens.findIndex(
+        (item) => matchesShareToken(item, query) && isShareTokenUsable(item),
+    );
+    if (tokenIndex < 0) {
+        return null;
+    }
+
+    const token = allTokens[tokenIndex];
+    if (token.mode !== 'count') {
+        return token;
+    }
+
+    const nextToken = {
+        ...token,
+        usedCount: Number(token.usedCount ?? 0) + 1,
+    };
+    allTokens[tokenIndex] = nextToken;
+    $.write(allTokens, TOKENS_KEY);
+    return nextToken;
+}
+
+function findShareToken(query) {
+    const allTokens = $.read(TOKENS_KEY) || [];
+    return (
+        allTokens.find(
+            (item) => matchesShareToken(item, query) && isShareTokenUsable(item),
+        ) || null
+    );
+}
+
 function shouldArchiveDeletion(mode) {
     if (mode == null || mode === '' || mode === 'permanent') {
         return false;
@@ -327,4 +497,4 @@ function shouldArchiveDeletion(mode) {
     );
 }
 
-export { createTokenItem, deleteTokenItem };
+export { createTokenItem, deleteTokenItem, consumeShareToken, findShareToken };

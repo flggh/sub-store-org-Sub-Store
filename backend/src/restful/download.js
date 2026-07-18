@@ -5,13 +5,24 @@ import { findByName } from '@/utils/database';
 import { getFlowHeaders, normalizeFlowHeader } from '@/utils/flow';
 import $ from '@/core/app';
 import { failed } from '@/restful/response';
-import { InternalServerError, ResourceNotFoundError } from '@/restful/errors';
+import {
+    InternalServerError,
+    RequestInvalidError,
+    ResourceNotFoundError,
+} from '@/restful/errors';
 import { produceArtifact } from '@/restful/sync';
 // eslint-disable-next-line no-unused-vars
 import { isIPv4, isIPv6 } from '@/utils';
 import { getISO } from '@/utils/geo';
 import env from '@/utils/env';
 import { parseBooleanStyleArgs } from '@/utils/parse';
+import { applyResponseTransformers } from '@/restful/response-transformer';
+import {
+    applyAgeOutputEncryption,
+    resolveShareAgeConfig,
+} from '@/restful/age-output';
+import { findShareToken } from '@/restful/token';
+import { maskAgeSecretInUrl } from '@/utils/age';
 
 function buildEmptyNezhaPayload() {
     return JSON.stringify(
@@ -32,12 +43,20 @@ function getMihomoExternalOptions(query) {
     const mihomoMergeName = useMihomoExternal
         ? query.mihomoMergeName
         : undefined;
+    let mihomoLocalPort;
+    if (useMihomoExternal && query.mihomoLocalPort != null) {
+        const parsed = parseInt(query.mihomoLocalPort, 10);
+        if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) {
+            mihomoLocalPort = parsed;
+        }
+    }
 
     return {
         useMihomoExternal,
         mihomoExternal,
         mihomoMerge,
         mihomoMergeName,
+        mihomoLocalPort,
     };
 }
 
@@ -114,9 +133,15 @@ export default function register($app) {
 
 async function downloadSubscription(req, res) {
     let { name, nezhaIndex } = req.params;
+    const isShareRoute = req.path?.startsWith('/share/');
 
-    const { useMihomoExternal, mihomoMerge, mihomoMergeName, mihomoExternal } =
-        getMihomoExternalOptions(req.query);
+    const {
+        useMihomoExternal,
+        mihomoMerge,
+        mihomoMergeName,
+        mihomoExternal,
+        mihomoLocalPort,
+    } = getMihomoExternalOptions(req.query);
 
     const platform =
         req.query.platform ||
@@ -139,6 +164,7 @@ async function downloadSubscription(req, res) {
         proxy,
         noCache,
         _fakeNode,
+        fakeSub: _fakeSub,
     } = req.query;
     const prettyYaml = req.query.prettyYaml ?? req.query['pretty-yaml'];
 
@@ -167,12 +193,54 @@ async function downloadSubscription(req, res) {
         $.info(`传入 $options: ${JSON.stringify(options)}`);
         Object.assign($options, options);
     }
+    if (isShareRoute && _fakeSub) {
+        $.warn(`分享链接禁止使用 fakeSub: ${name}`);
+        failed(
+            res,
+            new RequestInvalidError(
+                'UNSUPPORTED_SHARE_FAKE_SUB',
+                'share/sub 不支持 fakeSub 参数',
+            ),
+            400,
+        );
+        return;
+    }
+    if (
+        isShareRoute &&
+        ((url != null && url !== '') || (content != null && content !== ''))
+    ) {
+        $.warn(`分享链接禁止使用 url/content: ${name}`);
+        failed(
+            res,
+            new RequestInvalidError(
+                'UNSUPPORTED_SHARE_SUB_SOURCE_OVERRIDE',
+                'share/sub 不支持 url 或 content 参数',
+            ),
+            400,
+        );
+        return;
+    }
+    if (isShareRoute && mergeSources) {
+        $.warn(`分享链接禁止使用 mergeSources: ${name}`);
+        failed(
+            res,
+            new RequestInvalidError(
+                'UNSUPPORTED_SHARE_SUB_MERGE_SOURCES',
+                'share/sub 不支持 mergeSources 参数',
+            ),
+            400,
+        );
+        return;
+    }
     if (url) {
-        $.info(`指定远程订阅 URL: ${url}`);
+        $.info(`指定远程订阅 URL: ${maskAgeSecretInUrl(url)}`);
         if (!/^https?:\/\//.test(url)) {
             content = url;
             $.info(`URL 不是链接，视为本地订阅`);
         }
+    }
+    if (_fakeSub) {
+        $.info(`使用假订阅, 不再通过单条订阅名称 ${name} 查询`);
     }
     if (content) {
         $.info(`指定本地订阅: ${content}`);
@@ -200,17 +268,17 @@ async function downloadSubscription(req, res) {
         $.info(`指定输出 JSON 行格式 (pretty-yaml=false): ${prettyYaml}`);
     }
     if (mihomoMerge) {
-        $.info(`指定合并 Mihomo External: ${mihomoMerge}`);
+        $.info(`指定合并 mihomo External: ${mihomoMerge}`);
     }
     if (mihomoMergeName) {
-        $.info(`指定合并 Mihomo External 名称: ${mihomoMergeName}`);
+        $.info(`指定合并 mihomo External 名称: ${mihomoMergeName}`);
     }
 
     if (useMihomoExternal) {
-        $.info(`手动指定了 target 为 SurgeMac, 将使用 Mihomo External`);
+        $.info(`手动指定了 target 为 SurgeMac, 将使用 mihomo External`);
     }
     if (mihomoExternal) {
-        $.info(`手动指定了 Mihomo External 链接参数: ${mihomoExternal}`);
+        $.info(`手动指定了 mihomo External 链接参数: ${mihomoExternal}`);
     }
 
     if (noCache) {
@@ -218,13 +286,17 @@ async function downloadSubscription(req, res) {
     }
 
     const allSubs = $.read(SUBS_KEY) || [];
-    const fakeSub = {
+    const fakeSub = _fakeNode ? {
         name: 'fakeNodeInfo',
         source: 'local',
         content:
             'invalid share = ss, 1.0.0.1, 80, encrypt-method=aes-128-gcm, password=password',
+    } : {
+        name: 'fakeSub',
+        source: 'remote',
+        url: '',
     };
-    const sub = _fakeNode ? fakeSub : findByName(allSubs, name);
+    const sub = (_fakeNode || _fakeSub) ? fakeSub : findByName(allSubs, name);
     if (sub) {
         try {
             const passThroughUA = sub.passThroughUA;
@@ -250,14 +322,17 @@ async function downloadSubscription(req, res) {
                     merge: mihomoMerge,
                     mergeName: mihomoMergeName,
                     mihomoExternal,
+                    localPort: mihomoLocalPort,
                     prettyYaml,
                 },
                 $options,
                 proxy,
                 noCache,
             };
-            if (_fakeNode) {
-                $.info(`返回假节点信息`);
+            if (_fakeNode || _fakeSub) {
+                if(_fakeNode) {
+                    $.info(`返回假节点信息`);
+                }
                 delete opt.name;
                 opt.subscription = fakeSub;
             }
@@ -402,7 +477,29 @@ async function downloadSubscription(req, res) {
             if ($options?._res?.status) {
                 res.status($options._res.status);
             }
-            res.send(output);
+            const body = await applyResponseTransformers({
+                res,
+                body: output,
+                process: sub.process,
+                targetPlatform: platform,
+                source: { [sub.name]: sub },
+                $options,
+            });
+            res.send(
+                await applyAgeOutputEncryption({
+                    res,
+                    body,
+                    configs: [
+                        resolveShareAgeConfig({
+                            req,
+                            type: 'sub',
+                            name,
+                            findShareToken,
+                        }),
+                        sub,
+                    ],
+                }),
+            );
         } catch (err) {
             $.notify(
                 `🌍 Sub-Store 下载订阅失败`,
@@ -435,8 +532,13 @@ async function downloadSubscription(req, res) {
 async function downloadCollection(req, res) {
     let { name, nezhaIndex } = req.params;
 
-    const { useMihomoExternal, mihomoMerge, mihomoMergeName, mihomoExternal } =
-        getMihomoExternalOptions(req.query);
+    const {
+        useMihomoExternal,
+        mihomoMerge,
+        mihomoMergeName,
+        mihomoExternal,
+        mihomoLocalPort,
+    } = getMihomoExternalOptions(req.query);
 
     const platform =
         req.query.platform ||
@@ -504,17 +606,17 @@ async function downloadCollection(req, res) {
         $.info(`指定输出 JSON 行格式 (pretty-yaml=false): ${prettyYaml}`);
     }
     if (mihomoMerge) {
-        $.info(`指定合并 Mihomo External: ${mihomoMerge}`);
+        $.info(`指定合并 mihomo External: ${mihomoMerge}`);
     }
     if (mihomoMergeName) {
-        $.info(`指定合并 Mihomo External 名称: ${mihomoMergeName}`);
+        $.info(`指定合并 mihomo External 名称: ${mihomoMergeName}`);
     }
 
     if (useMihomoExternal) {
-        $.info(`手动指定了 target 为 SurgeMac, 将使用 Mihomo External`);
+        $.info(`手动指定了 target 为 SurgeMac, 将使用 mihomo External`);
     }
     if (mihomoExternal) {
-        $.info(`手动指定了 Mihomo External 链接参数: ${mihomoExternal}`);
+        $.info(`手动指定了 mihomo External 链接参数: ${mihomoExternal}`);
     }
     if (noCache) {
         $.info(`指定不使用缓存: ${noCache}`);
@@ -534,6 +636,7 @@ async function downloadCollection(req, res) {
                     merge: mihomoMerge,
                     mergeName: mihomoMergeName,
                     mihomoExternal,
+                    localPort: mihomoLocalPort,
                     prettyYaml,
                 },
                 $options,
@@ -712,7 +815,29 @@ async function downloadCollection(req, res) {
             if ($options?._res?.status) {
                 res.status($options._res.status);
             }
-            res.send(output);
+            const body = await applyResponseTransformers({
+                res,
+                body: output,
+                process: collection.process,
+                targetPlatform: platform,
+                source: { _collection: collection },
+                $options,
+            });
+            res.send(
+                await applyAgeOutputEncryption({
+                    res,
+                    body,
+                    configs: [
+                        resolveShareAgeConfig({
+                            req,
+                            type: 'col',
+                            name,
+                            findShareToken,
+                        }),
+                        collection,
+                    ],
+                }),
+            );
         } catch (err) {
             $.notify(
                 `🌍 Sub-Store 下载组合订阅失败`,

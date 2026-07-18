@@ -10,8 +10,19 @@ import {
     notifyIgnoreFailedRemoteSubFallback,
     resolveIgnoreFailedRemoteSubMode,
     shouldFallbackIgnoreFailedRemoteSub,
+    shouldNotifyIgnoreFailedRemoteSub,
 } from '@/restful/ignore-failed-remote-sub';
+import {
+    prepareMihomoProfileContent,
+    resolveFileRawContent,
+} from '@/restful/sync';
 import { normalizeClashYaml } from '@/core/proxy-utils/preprocessors';
+import { maskAgeSecretInUrl } from '@/utils/age';
+import { isMihomoConfigFile, normalizeFileConfig } from '@/utils/file-type';
+
+function formatAgeSafeUrls(errors) {
+    return Object.keys(errors).map(maskAgeSecretInUrl).join(', ');
+}
 
 export default function register($app) {
     $app.post('/api/preview/sub', compareSub);
@@ -21,62 +32,16 @@ export default function register($app) {
 
 async function previewFile(req, res) {
     try {
-        const file = req.body;
+        const file = normalizeFileConfig(req.body);
         let content = '';
-        if (file.type !== 'mihomoProfile') {
-            if (
-                file.source === 'local' &&
-                !['localFirst', 'remoteFirst'].includes(file.mergeSources)
-            ) {
-                content = file.content;
-            } else {
-                const errors = {};
-                content = await Promise.all(
-                    `${file.url || ''}`
-                        .split(/[\r\n]+/)
-                        .map((i) => i.trim())
-                        .filter((i) => i.length)
-                        .map(async (url) => {
-                            try {
-                                return await download(
-                                    url,
-                                    file.ua,
-                                    undefined,
-                                    file.proxy,
-                                );
-                            } catch (err) {
-                                errors[url] = err;
-                                $.error(
-                                    `文件 ${file.name} 的远程文件 ${url} 发生错误: ${err}`,
-                                );
-                                return '';
-                            }
-                        }),
-                );
-
-                if (Object.keys(errors).length > 0) {
-                    if (!file.ignoreFailedRemoteFile) {
-                        throw new Error(
-                            `文件 ${file.name} 的远程文件 ${Object.keys(
-                                errors,
-                            ).join(', ')} 发生错误, 请查看日志`,
-                        );
-                    } else if (file.ignoreFailedRemoteFile === 'enabled') {
-                        $.notify(
-                            `🌍 Sub-Store 预览文件失败`,
-                            `❌ ${file.name}`,
-                            `远程文件 ${Object.keys(errors).join(
-                                ', ',
-                            )} 发生错误, 请查看日志`,
-                        );
-                    }
-                }
-                if (file.mergeSources === 'localFirst') {
-                    content.unshift(file.content);
-                } else if (file.mergeSources === 'remoteFirst') {
-                    content.push(file.content);
-                }
-            }
+        if (isMihomoConfigFile(file)) {
+            content = await prepareMihomoProfileContent(file, {
+                notifyTitle: '🌍 Sub-Store 预览文件失败',
+            });
+        } else {
+            content = await resolveFileRawContent(file, {
+                notifyTitle: '🌍 Sub-Store 预览文件失败',
+            });
         }
         // parse proxies
         const files = (Array.isArray(content) ? content : [content]).flat();
@@ -118,14 +83,16 @@ async function compareSub(req, res) {
     try {
         const target = req.query.target || 'JSON';
         let content;
+        let sourceRaw;
         if (
             sub.source === 'local' &&
             !['localFirst', 'remoteFirst'].includes(sub.mergeSources)
         ) {
             content = sub.content;
+            sourceRaw = sub.content;
         } else {
             const errors = {};
-            content = await Promise.all(
+            const downloaded = await Promise.all(
                 `${sub.url || ''}`
                     .split(/[\r\n]+/)
                     .map((i) => i.trim())
@@ -141,21 +108,28 @@ async function compareSub(req, res) {
                                 undefined,
                                 undefined,
                                 true,
+                                { returnRaw: true },
                             );
                         } catch (err) {
                             errors[url] = err;
                             $.error(
-                                `订阅 ${sub.name} 的远程订阅 ${url} 发生错误: ${err}`,
+                                `订阅 ${sub.name} 的远程订阅 ${maskAgeSecretInUrl(
+                                    url,
+                                )} 发生错误: ${err}`,
                             );
                             return '';
                         }
                     }),
             );
+            content = downloaded.map((i) => i.result ?? i);
+            sourceRaw = downloaded.map((i) => i.raw ?? i);
 
             if (Object.keys(errors).length > 0) {
-                const message = `订阅 ${sub.name} 的远程订阅 ${Object.keys(
+                const message = `订阅 ${
+                    sub.name
+                } 的远程订阅 ${formatAgeSafeUrls(
                     errors,
-                ).join(', ')} 发生错误, 请查看日志`;
+                )} 发生错误, 请查看日志`;
                 handleIgnoreFailedRemoteSubError({
                     mode,
                     message,
@@ -170,8 +144,10 @@ async function compareSub(req, res) {
             }
             if (sub.mergeSources === 'localFirst') {
                 content.unshift(sub.content);
+                sourceRaw.unshift(sub.content);
             } else if (sub.mergeSources === 'remoteFirst') {
                 content.push(sub.content);
+                sourceRaw.push(sub.content);
             }
         }
         // parse proxies
@@ -192,6 +168,8 @@ async function compareSub(req, res) {
             sub.process || [],
             target,
             { [sub.name]: sub },
+            undefined,
+            sourceRaw,
         );
 
         // produce
@@ -256,6 +234,7 @@ async function compareCollection(req, res) {
         }
         const results = {};
         const errors = {};
+        const rawResults = {};
         await Promise.all(
             subnames.map(async (name) => {
                 const sub = findByName(allSubs, name);
@@ -268,6 +247,7 @@ async function compareCollection(req, res) {
                 );
                 try {
                     let raw;
+                    let sourceRaw;
                     if (
                         sub.source === 'local' &&
                         !['localFirst', 'remoteFirst'].includes(
@@ -275,9 +255,10 @@ async function compareCollection(req, res) {
                         )
                     ) {
                         raw = sub.content;
+                        sourceRaw = sub.content;
                     } else {
                         const errors = {};
-                        raw = await Promise.all(
+                        const downloaded = await Promise.all(
                             `${sub.url || ''}`
                                 .split(/[\r\n]+/)
                                 .map((i) => i.trim())
@@ -293,21 +274,30 @@ async function compareCollection(req, res) {
                                             undefined,
                                             undefined,
                                             true,
+                                            { returnRaw: true },
                                         );
                                     } catch (err) {
                                         errors[url] = err;
                                         $.error(
-                                            `订阅 ${sub.name} 的远程订阅 ${url} 发生错误: ${err}`,
+                                            `订阅 ${
+                                                sub.name
+                                            } 的远程订阅 ${maskAgeSecretInUrl(
+                                                url,
+                                            )} 发生错误: ${err}`,
                                         );
                                         return '';
                                     }
                                 }),
                         );
+                        raw = downloaded.map((i) => i.result ?? i);
+                        sourceRaw = downloaded.map((i) => i.raw ?? i);
 
                         if (Object.keys(errors).length > 0) {
-                            const message = `订阅 ${sub.name} 的远程订阅 ${Object.keys(
+                            const message = `订阅 ${
+                                sub.name
+                            } 的远程订阅 ${formatAgeSafeUrls(
                                 errors,
-                            ).join(', ')} 发生错误, 请查看日志`;
+                            )} 发生错误, 请查看日志`;
                             handleIgnoreFailedRemoteSubError({
                                 mode: subMode,
                                 message,
@@ -322,8 +312,10 @@ async function compareCollection(req, res) {
                         }
                         if (sub.mergeSources === 'localFirst') {
                             raw.unshift(sub.content);
+                            sourceRaw.unshift(sub.content);
                         } else if (sub.mergeSources === 'remoteFirst') {
                             raw.push(sub.content);
+                            sourceRaw.push(sub.content);
                         }
                     }
                     // parse proxies
@@ -339,13 +331,19 @@ async function compareCollection(req, res) {
                     });
 
                     // apply processors
+                    const currentRaw = Array.isArray(sourceRaw)
+                        ? sourceRaw
+                        : [sourceRaw];
                     currentProxies = await ProxyUtils.process(
                         currentProxies,
                         sub.process || [],
                         'JSON',
                         { [sub.name]: sub, _collection: collection },
+                        undefined,
+                        currentRaw,
                     );
                     results[name] = currentProxies;
+                    rawResults[name] = currentRaw;
                 } catch (err) {
                     if (shouldFallbackIgnoreFailedRemoteSub(subMode)) {
                         notifyIgnoreFailedRemoteSubFallback({
@@ -365,10 +363,12 @@ async function compareCollection(req, res) {
                             }`,
                         );
                         results[name] = [];
+                        rawResults[name] = [];
                         return;
                     }
 
                     errors[name] = err;
+                    rawResults[name] = undefined;
 
                     $.error(
                         `❌ 处理组合订阅 ${collection.name} 中的子订阅: ${sub.name} 时出现错误：${err}！`,
@@ -381,17 +381,31 @@ async function compareCollection(req, res) {
             const message = `组合订阅 ${collection.name} 的子订阅 ${Object.keys(
                 errors,
             ).join(', ')} 发生错误, 请查看日志`;
-            handleIgnoreFailedRemoteSubError({
-                mode: collectionMode,
-                message,
-                notify: () => {
-                    $.notify(
-                        `🌍 Sub-Store 预览组合订阅失败`,
-                        `❌ ${collection.name}`,
-                        message,
-                    );
-                },
-            });
+            const notify = () => {
+                $.notify(
+                    `🌍 Sub-Store 预览组合订阅失败`,
+                    `❌ ${collection.name}`,
+                    message,
+                );
+            };
+            const hasProcessedSubscriptions = Object.keys(results).length > 0;
+            if (
+                hasProcessedSubscriptions &&
+                shouldFallbackIgnoreFailedRemoteSub(collectionMode)
+            ) {
+                Object.keys(errors).forEach((name) => {
+                    rawResults[name] = [];
+                });
+                if (shouldNotifyIgnoreFailedRemoteSub(collectionMode)) {
+                    notify();
+                }
+            } else {
+                handleIgnoreFailedRemoteSubError({
+                    mode: collectionMode,
+                    message,
+                    notify,
+                });
+            }
         }
         // merge proxies with the original order
         const original = Array.prototype.concat.apply(
@@ -410,6 +424,8 @@ async function compareCollection(req, res) {
             collection.process || [],
             'JSON',
             { _collection: collection },
+            undefined,
+            rawResults,
         );
 
         success(res, { original, processed });

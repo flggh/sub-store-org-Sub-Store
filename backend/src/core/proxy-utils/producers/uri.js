@@ -7,7 +7,7 @@ import {
     normalizeXhttpIntegerValue,
     normalizeXhttpNonNegativeRange,
     normalizeXhttpPositiveRange,
-    normalizeXhttpScalarUpperBound,
+    normalizeXhttpStrictPositiveRangeValue,
 } from '../xhttp-utils';
 import {
     extractPathQueryParam,
@@ -18,6 +18,7 @@ import {
     buildXrayEchConfigListFromMihomo,
     buildXrayEchFieldsFromMihomo,
 } from '../ech-utils';
+import { normalizeVmessSecurity } from '../vmess-security';
 
 function toStringHeaderMap(headers, { excludeHost = false } = {}) {
     if (!isPlainObject(headers)) {
@@ -26,7 +27,7 @@ function toStringHeaderMap(headers, { excludeHost = false } = {}) {
 
     const parsedHeaders = {};
     for (const [key, value] of Object.entries(headers)) {
-        if (typeof value !== 'string' || value === '') {
+        if (typeof value !== 'string') {
             continue;
         }
         if (excludeHost && /^host$/i.test(key)) {
@@ -208,10 +209,28 @@ function applyStructuredXhttpExtraFields(
         target.uplinkHTTPMethod = xhttpOpts['uplink-http-method'];
     }
     if (xhttpOpts['session-placement']) {
-        target.sessionPlacement = xhttpOpts['session-placement'];
+        target.sessionIDPlacement = xhttpOpts['session-placement'];
     }
     if (xhttpOpts['session-key']) {
-        target.sessionKey = xhttpOpts['session-key'];
+        target.sessionIDKey = xhttpOpts['session-key'];
+    }
+    if (typeof xhttpOpts['session-table'] === 'string') {
+        // NOTE: This mirrors the current structured field mapping only.
+        // Xray-core/mihomo still apply coupled validation with
+        // session-length when the table is non-empty: ASCII-only table,
+        // strictly positive length range, and enough total ID space.
+        target.sessionIDTable = xhttpOpts['session-table'];
+    }
+    if (xhttpOpts['session-length'] != null) {
+        // NOTE: The normalized range here is only a local serialization check.
+        // Upstream compatibility still depends on the session-table/session-
+        // length pair satisfying the extra Xray-core/mihomo constraints.
+        const sessionIDLength = normalizeXhttpStrictPositiveRangeValue(
+            xhttpOpts['session-length'],
+        );
+        if (sessionIDLength != null) {
+            target.sessionIDLength = sessionIDLength;
+        }
     }
     if (xhttpOpts['seq-placement']) {
         target.seqPlacement = xhttpOpts['seq-placement'];
@@ -234,7 +253,7 @@ function applyStructuredXhttpExtraFields(
     }
 
     if (xhttpOpts['sc-max-each-post-bytes'] != null) {
-        const scMaxEachPostBytes = normalizeXhttpScalarUpperBound(
+        const scMaxEachPostBytes = normalizeXhttpStrictPositiveRangeValue(
             xhttpOpts['sc-max-each-post-bytes'],
         );
         if (scMaxEachPostBytes != null) {
@@ -525,9 +544,7 @@ function buildVlessExtra(proxy) {
     // structured Mihomo node so later edits are reflected on export, while
     // `_extra_unsupported` fills the holes needed for VLESS URI -> node ->
     // VLESS URI lossless round-trips. That also means supported-field format
-    // conflicts are resolved by the structured emitters here, e.g.
-    // sc-max-each-post-bytes still emits the compatibility upper bound while
-    // sc-min-posts-interval-ms keeps range.
+    // conflicts are resolved by the structured emitters here.
     const mergedExtra = mergeUnsupportedXhttpExtraObject(
         structuredExtra,
         proxy._extra_unsupported,
@@ -578,6 +595,13 @@ function vless(proxy) {
     let pcs = '';
     if (proxy['tls-fingerprint']) {
         pcs = `&pcs=${encodeURIComponent(proxy['tls-fingerprint'])}`;
+    }
+    let vcn = '';
+    const certNames = Array.isArray(proxy._vcn)
+        ? proxy._vcn.join(',')
+        : proxy['name-cert-verify'];
+    if (Array.isArray(proxy._vcn) || certNames) {
+        vcn = `&vcn=${encodeURIComponent(certNames)}`;
     }
     let ech = '';
     const echConfigList = buildXrayEchConfigListFromMihomo(
@@ -732,17 +756,35 @@ function vless(proxy) {
     }
 
     let packetEncoding = '';
-    if (proxy['packet-addr']) {
-        packetEncoding = '&packetEncoding=packet';
-    } else if (proxy.udp === true && !proxy.xudp) {
-        packetEncoding = '&packetEncoding=none';
+    let canonicalPacketEncoding;
+    if (proxy['packet-encoding'] != null) {
+        canonicalPacketEncoding = `${proxy['packet-encoding']}`
+            .trim()
+            .toLowerCase();
+    } else if (proxy.xudp) {
+        canonicalPacketEncoding = 'xudp';
+    } else if (proxy['packet-addr']) {
+        canonicalPacketEncoding = 'packetaddr';
+    } else if (proxy.udp === true) {
+        canonicalPacketEncoding = '';
+    }
+    switch (canonicalPacketEncoding) {
+        case '':
+            packetEncoding = '&packetEncoding=none';
+            break;
+        case 'packetaddr':
+            packetEncoding = '&packetEncoding=packet';
+            break;
+        case 'xudp':
+            packetEncoding = '&packetEncoding=xudp';
+            break;
     }
 
     return `vless://${proxy.uuid}@${proxy.server}:${
         proxy.port
     }?security=${encodeURIComponent(
         security,
-    )}${vlessTransport}${packetEncoding}${alpn}${allowInsecure}${pcs}${ech}${h2}${sni}${fp}${flow}${sid}${spx}${pbk}${mode}${extra}${pqv}${encryption}#${encodeURIComponent(
+    )}${vlessTransport}${packetEncoding}${alpn}${allowInsecure}${pcs}${vcn}${ech}${h2}${sni}${fp}${flow}${sid}${spx}${pbk}${mode}${extra}${pqv}${encryption}#${encodeURIComponent(
         proxy.name,
     )}`;
 }
@@ -1000,7 +1042,7 @@ export default function URI_Producer() {
                     port: `${proxy.port}`,
                     id: proxy.uuid,
                     aid: `${proxy.alterId || 0}`,
-                    scy: proxy.cipher,
+                    scy: normalizeVmessSecurity(proxy.cipher),
                     net,
                     type,
                     tls: proxy.tls ? 'tls' : '',
@@ -1020,10 +1062,10 @@ export default function URI_Producer() {
                         proxy.network === 'ws' &&
                         vmessTransportOpts?.['v2ray-http-upgrade'];
                     let vmessTransportPath = vmessTransportOpts?.path;
-                    let vmessTransportHost =
-                        vmessTransportOpts?.headers?.[
-                            proxy.network === 'h2' ? 'host' : 'Host'
-                        ];
+                    let vmessTransportHost = getTransportHost(
+                        proxy.network,
+                        vmessTransportOpts,
+                    );
 
                     if (['grpc'].includes(proxy.network)) {
                         result.path =
@@ -1162,6 +1204,13 @@ export default function URI_Producer() {
                         proxy['tls-fingerprint'],
                     )}`;
                 }
+                let trojanVcn = '';
+                const trojanCertNames = Array.isArray(proxy._vcn)
+                    ? proxy._vcn.join(',')
+                    : proxy['name-cert-verify'];
+                if (Array.isArray(proxy._vcn) || trojanCertNames) {
+                    trojanVcn = `&vcn=${encodeURIComponent(trojanCertNames)}`;
+                }
                 let trojanAlpn = '';
                 if (proxy.alpn) {
                     trojanAlpn = `&alpn=${encodeURIComponent(
@@ -1204,7 +1253,7 @@ export default function URI_Producer() {
                     proxy.port
                 }?sni=${encodeURIComponent(proxy.sni || proxy.server)}${
                     proxy['skip-cert-verify'] ? '&allowInsecure=1' : ''
-                }${trojanTransport}${trojanAlpn}${trojanFp}${trojanPcs}${trojanSecurity}${trojanSid}${trojanPbk}${trojanSpx}${trojanMode}${trojanExtra}#${encodeURIComponent(
+                }${trojanTransport}${trojanAlpn}${trojanFp}${trojanPcs}${trojanVcn}${trojanSecurity}${trojanSid}${trojanPbk}${trojanSpx}${trojanMode}${trojanExtra}#${encodeURIComponent(
                     proxy.name,
                 )}`;
                 break;
@@ -1250,6 +1299,14 @@ export default function URI_Producer() {
                 }
                 if (proxy.tfo) {
                     hysteria2params.push(`fastopen=1`);
+                }
+                const hysteria2Ech = buildXrayEchConfigListFromMihomo(
+                    proxy['ech-opts'],
+                );
+                if (hysteria2Ech) {
+                    hysteria2params.push(
+                        `ech=${encodeURIComponent(hysteria2Ech)}`,
+                    );
                 }
                 result = `hysteria2://${encodeURIComponent(proxy.password)}@${
                     proxy.server

@@ -19,7 +19,7 @@ describe('VMess and VLESS parser coverage', function () {
                 port: 443,
                 cipher: 'auto',
                 uuid: UUID,
-                udp: 'true',
+                udp: true,
                 tfo: 'true',
                 'skip-cert-verify': true,
             });
@@ -151,12 +151,36 @@ describe('VMess and VLESS parser coverage', function () {
             });
         });
 
-        it('parses V2rayN http shares and normalizes http paths', function () {
+        it('keeps supported zero VMess security values', function () {
             const share = Base64.encode(
                 JSON.stringify({
-                    ps: 'VMess HTTP',
+                    ps: 'VMess Zero Security',
+                    add: 'vmess-zero.example.com',
+                    port: '443',
+                    id: UUID,
+                    aid: '0',
+                    scy: 'zero',
+                }),
+            );
+            const proxy = parseOne(`vmess://${share}`);
+
+            expectSubset(proxy, {
+                type: 'vmess',
+                name: 'VMess Zero Security',
+                server: 'vmess-zero.example.com',
+                port: 443,
+                cipher: 'zero',
+                uuid: UUID,
+                alterId: 0,
+            });
+        });
+
+        it('parses V2rayN http transport shares as h2', function () {
+            const share = Base64.encode(
+                JSON.stringify({
+                    ps: 'VMess H2',
                     add: 'vmess-http.example.com',
-                    port: '80',
+                    port: '443',
                     id: UUID,
                     aid: '1',
                     scy: 'unknown-cipher',
@@ -169,8 +193,41 @@ describe('VMess and VLESS parser coverage', function () {
 
             expectSubset(proxy, {
                 type: 'vmess',
-                name: 'VMess HTTP',
+                name: 'VMess H2',
                 server: 'vmess-http.example.com',
+                port: 443,
+                uuid: UUID,
+                alterId: 1,
+                cipher: 'auto',
+                network: 'h2',
+                'h2-opts': {
+                    host: ['h1.example.com', 'h2.example.com'],
+                    path: '/a,/b',
+                },
+            });
+        });
+
+        it('parses V2rayN tcp fake-http shares as http header transport', function () {
+            const share = Base64.encode(
+                JSON.stringify({
+                    ps: 'VMess HTTP Header',
+                    add: 'vmess-http-header.example.com',
+                    port: '80',
+                    id: UUID,
+                    aid: '1',
+                    scy: 'auto',
+                    net: 'tcp',
+                    type: 'http',
+                    host: 'h1.example.com,h2.example.com',
+                    path: '/a,/b',
+                }),
+            );
+            const proxy = parseOne(`vmess://${share}`);
+
+            expectSubset(proxy, {
+                type: 'vmess',
+                name: 'VMess HTTP Header',
+                server: 'vmess-http-header.example.com',
                 port: 80,
                 uuid: UUID,
                 alterId: 1,
@@ -404,7 +461,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'client-fingerprint': 'chrome',
                 alpn: ['h2'],
                 udp: true,
-                xudp: true,
+                'packet-encoding': 'xudp',
                 network: 'ws',
                 'ws-opts': {
                     path: '/ws',
@@ -432,7 +489,7 @@ describe('VMess and VLESS parser coverage', function () {
                 'client-fingerprint': 'chrome',
                 alpn: ['h2'],
                 udp: true,
-                xudp: true,
+                'packet-encoding': 'xudp',
                 network: 'ws',
                 'ws-opts': {
                     path: '/ws',
@@ -456,7 +513,7 @@ describe('VMess and VLESS parser coverage', function () {
                 uuid: UUID,
                 tls: true,
                 udp: true,
-                'packet-addr': true,
+                'packet-encoding': 'packetaddr',
                 network: 'ws',
                 'ws-opts': {
                     path: '/ws',
@@ -468,6 +525,31 @@ describe('VMess and VLESS parser coverage', function () {
                 },
             });
             expect(proxy).to.not.have.property('xudp');
+            expect(proxy).to.not.have.property('packet-addr');
+        });
+
+        it('parses websocket VLESS shares with xudp packet encoding', function () {
+            const proxy = parseOne(
+                `vless://${UUID}@vless-xudp.example.com:443?type=ws&security=tls&host=cdn.example.com&path=%2Fws&packetEncoding=xudp#VLESS%20WS%20XUDP`,
+            );
+
+            expectSubset(proxy, {
+                type: 'vless',
+                name: 'VLESS WS XUDP',
+                server: 'vless-xudp.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                udp: true,
+                'packet-encoding': 'xudp',
+                network: 'ws',
+                'ws-opts': {
+                    path: '/ws',
+                    headers: {
+                        Host: 'cdn.example.com',
+                    },
+                },
+            });
         });
 
         it('parses websocket VLESS shares with pcs as tls fingerprint', function () {
@@ -483,7 +565,7 @@ describe('VMess and VLESS parser coverage', function () {
                 uuid: UUID,
                 tls: true,
                 udp: true,
-                xudp: true,
+                'packet-encoding': 'xudp',
                 'tls-fingerprint': 'fingerprint',
                 network: 'ws',
                 'ws-opts': {
@@ -493,6 +575,20 @@ describe('VMess and VLESS parser coverage', function () {
                     },
                 },
             });
+        });
+
+        it('parses the first VLESS vcn as mihomo name-cert-verify', function () {
+            const proxy = parseOne(
+                `vless://${UUID}@vless-ws.example.com:443?type=ws&security=tls&vcn=${encodeURIComponent(
+                    'first.example.com, second.example.com',
+                )}#VLESS%20WS%20VCN`,
+            );
+
+            expect(proxy['name-cert-verify']).to.equal('first.example.com');
+            expect(proxy._vcn).to.deep.equal([
+                'first.example.com',
+                'second.example.com',
+            ]);
         });
 
         it('parses VLESS share ECH config into mihomo ech opts', function () {
@@ -796,7 +892,7 @@ describe('VMess and VLESS parser coverage', function () {
 
         it('parses h2 VLESS shares from share-link http transport', function () {
             const proxy = parseOne(
-                `vless://${UUID}@vless-h2.example.com:443?type=http&host=h2.example.com&path=%2Fh2&h2=1&packetEncoding=none#VLESS%20H2`,
+                `vless://${UUID}@vless-h2.example.com:443?type=http&host=h2.example.com,h2-alt.example.com&path=%2Fh2&h2=1&packetEncoding=none#VLESS%20H2`,
             );
 
             expectSubset(proxy, {
@@ -805,16 +901,40 @@ describe('VMess and VLESS parser coverage', function () {
                 server: 'vless-h2.example.com',
                 port: 443,
                 udp: true,
+                'packet-encoding': '',
                 network: 'h2',
                 _h2: true,
                 'h2-opts': {
-                    headers: {
-                        host: ['h2.example.com'],
-                    },
+                    host: ['h2.example.com', 'h2-alt.example.com'],
                     path: '/h2',
                 },
             });
             expect(proxy).to.not.have.property('xudp');
+        });
+
+        it('keeps non-Host h2 headers while lifting Host into h2-opts host', function () {
+            const headers = encodeURIComponent(
+                JSON.stringify({
+                    Host: 'cdn.example.com',
+                    'User-Agent': 'curl/7.77.0',
+                }),
+            );
+            const proxy = parseOne(
+                `vless://${UUID}@vless-h2.example.com:443?type=http&obfsParam=${headers}&path=%2Fh2#VLESS%20H2%20Headers`,
+            );
+
+            expectSubset(proxy, {
+                type: 'vless',
+                name: 'VLESS H2 Headers',
+                network: 'h2',
+                'h2-opts': {
+                    headers: {
+                        'User-Agent': 'curl/7.77.0',
+                    },
+                    host: ['cdn.example.com'],
+                    path: '/h2',
+                },
+            });
         });
 
         it('parses xhttp VLESS shares with mihomo transport extras', function () {
@@ -823,6 +943,8 @@ describe('VMess and VLESS parser coverage', function () {
                 xPaddingBytes: '64-128',
                 scMaxEachPostBytes: 1000000,
                 scMinPostsIntervalMs: 300,
+                sessionIDTable: 'abcXYZ012',
+                sessionIDLength: 16,
                 xmux: {
                     maxConnections: 0,
                     maxConcurrency: '16-32',
@@ -853,6 +975,8 @@ describe('VMess and VLESS parser coverage', function () {
                     'x-padding-bytes': '64-128',
                     'sc-max-each-post-bytes': 1000000,
                     'sc-min-posts-interval-ms': 300,
+                    'session-table': 'abcXYZ012',
+                    'session-length': '16',
                     'reuse-settings': {
                         'max-connections': '0',
                         'max-concurrency': '16-32',
@@ -908,9 +1032,11 @@ describe('VMess and VLESS parser coverage', function () {
                         host: 'download-host.example.com',
                         noGRPCHeader: true,
                         xPaddingBytes: '32-64',
+                        sessionIDTable: 'Base62',
                         scMaxEachPostBytes: '500000-1000000',
                         scMinPostsIntervalMs: '0-300',
                         extra: {
+                            sessionIDLength: '8-12',
                             xmux: {
                                 maxConnections: '8',
                                 hMaxReusableSecs: '900',
@@ -948,7 +1074,9 @@ describe('VMess and VLESS parser coverage', function () {
                         host: 'download-host.example.com',
                         'no-grpc-header': true,
                         'x-padding-bytes': '32-64',
-                        'sc-max-each-post-bytes': 1000000,
+                        'session-table': 'Base62',
+                        'session-length': '8-12',
+                        'sc-max-each-post-bytes': '500000-1000000',
                         'sc-min-posts-interval-ms': '0-300',
                         'reuse-settings': {
                             'max-connections': '8',
@@ -1289,11 +1417,11 @@ describe('VMess and VLESS parser coverage', function () {
             });
         });
 
-        it('parses xhttp VLESS shares with Mihomo-style leading-zero sc scalars', function () {
+        it('parses xhttp VLESS shares with Mihomo-style leading-zero sc values', function () {
             const extra = JSON.stringify({
                 noGRPCHeader: true,
                 xPaddingBytes: '64-128',
-                scMaxEachPostBytes: '000-1000000',
+                scMaxEachPostBytes: '000001-1000000',
                 scMinPostsIntervalMs: '0300',
                 downloadSettings: {
                     address: 'download.example.com',
@@ -1302,7 +1430,7 @@ describe('VMess and VLESS parser coverage', function () {
                     xhttpSettings: {
                         path: '/download',
                         host: 'download-host.example.com',
-                        scMaxEachPostBytes: '000-1000000',
+                        scMaxEachPostBytes: '000001-1000000',
                         scMinPostsIntervalMs: '000-300',
                     },
                 },
@@ -1327,7 +1455,7 @@ describe('VMess and VLESS parser coverage', function () {
                     host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
-                    'sc-max-each-post-bytes': 1000000,
+                    'sc-max-each-post-bytes': '1-1000000',
                     'sc-min-posts-interval-ms': 300,
                     'download-settings': {
                         server: 'download.example.com',
@@ -1335,14 +1463,14 @@ describe('VMess and VLESS parser coverage', function () {
                         tls: true,
                         path: '/download',
                         host: 'download-host.example.com',
-                        'sc-max-each-post-bytes': 1000000,
+                        'sc-max-each-post-bytes': '1-1000000',
                         'sc-min-posts-interval-ms': '0-300',
                     },
                 },
             });
         });
 
-        it('parses xhttp VLESS shares with Mihomo-style explicit-plus sc scalars', function () {
+        it('parses xhttp VLESS shares with Mihomo-style explicit-plus sc values', function () {
             const extra = JSON.stringify({
                 noGRPCHeader: true,
                 xPaddingBytes: '64-128',
@@ -1355,7 +1483,7 @@ describe('VMess and VLESS parser coverage', function () {
                     xhttpSettings: {
                         path: '/download',
                         host: 'download-host.example.com',
-                        scMaxEachPostBytes: '+0-+1000000',
+                        scMaxEachPostBytes: '+1-+1000000',
                         scMinPostsIntervalMs: '+0-+300',
                     },
                 },
@@ -1380,7 +1508,7 @@ describe('VMess and VLESS parser coverage', function () {
                     host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
-                    'sc-max-each-post-bytes': 1000000,
+                    'sc-max-each-post-bytes': '500000-1000000',
                     'sc-min-posts-interval-ms': 300,
                     'download-settings': {
                         server: 'download.example.com',
@@ -1388,7 +1516,7 @@ describe('VMess and VLESS parser coverage', function () {
                         tls: true,
                         path: '/download',
                         host: 'download-host.example.com',
-                        'sc-max-each-post-bytes': 1000000,
+                        'sc-max-each-post-bytes': '1-1000000',
                         'sc-min-posts-interval-ms': '0-300',
                     },
                 },
@@ -1512,6 +1640,102 @@ describe('VMess and VLESS parser coverage', function () {
                 downloadSettings: {
                     xhttpSettings: {
                         scMinPostsIntervalMs: '0-0',
+                    },
+                },
+            });
+        });
+
+        it('parses empty xhttp VLESS session id tables as supported strings', function () {
+            const extra = JSON.stringify({
+                sessionIDTable: '',
+                downloadSettings: {
+                    network: 'xhttp',
+                    xhttpSettings: {
+                        sessionIDTable: '',
+                    },
+                },
+            });
+            const proxy = parseOne(
+                `vless://${UUID}@vless-xhttp.example.com:443?type=xhttp&security=tls&host=cdn.example.com&path=%2Fxhttp&mode=stream-up&extra=${encodeURIComponent(
+                    extra,
+                )}#VLESS%20XHTTP%20Empty%20Session%20Table`,
+            );
+
+            expectSubset(proxy, {
+                type: 'vless',
+                server: 'vless-xhttp.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                network: 'xhttp',
+                'xhttp-opts': {
+                    mode: 'stream-up',
+                    path: '/xhttp',
+                    host: 'cdn.example.com',
+                    'session-table': '',
+                    'download-settings': {
+                        network: 'xhttp',
+                        'session-table': '',
+                    },
+                },
+            });
+            expect(proxy).to.not.have.property('_extra');
+            expect(proxy).to.not.have.property('_extra_unsupported');
+        });
+
+        it('keeps invalid xhttp VLESS session id fields in _extra_unsupported', function () {
+            const extra = JSON.stringify({
+                sessionIDTable: 123,
+                sessionIDLength: '0-32',
+                downloadSettings: {
+                    network: 'xhttp',
+                    xhttpSettings: {
+                        sessionIDTable: false,
+                        extra: {
+                            sessionIDLength: '0-0',
+                        },
+                    },
+                },
+            });
+            const proxy = parseOne(
+                `vless://${UUID}@vless-xhttp.example.com:443?type=xhttp&security=tls&host=cdn.example.com&path=%2Fxhttp&mode=stream-up&extra=${encodeURIComponent(
+                    extra,
+                )}#VLESS%20XHTTP%20Invalid%20Session%20ID`,
+            );
+
+            expectSubset(proxy, {
+                type: 'vless',
+                server: 'vless-xhttp.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                network: 'xhttp',
+                'xhttp-opts': {
+                    mode: 'stream-up',
+                    path: '/xhttp',
+                    host: 'cdn.example.com',
+                    'download-settings': {
+                        network: 'xhttp',
+                    },
+                },
+            });
+            expect(proxy['xhttp-opts']).to.not.have.property('session-table');
+            expect(proxy['xhttp-opts']).to.not.have.property('session-length');
+            expect(
+                proxy['xhttp-opts']?.['download-settings'],
+            ).to.not.have.property('session-table');
+            expect(
+                proxy['xhttp-opts']?.['download-settings'],
+            ).to.not.have.property('session-length');
+            expect(proxy._extra_unsupported).to.deep.equal({
+                sessionIDTable: 123,
+                sessionIDLength: '0-32',
+                downloadSettings: {
+                    xhttpSettings: {
+                        sessionIDTable: false,
+                        extra: {
+                            sessionIDLength: '0-0',
+                        },
                     },
                 },
             });
@@ -1681,6 +1905,121 @@ describe('VMess and VLESS parser coverage', function () {
             ).to.not.have.property('sockopt');
         });
 
+        it('normalizes xhttp VLESS extra field types from Xray JSON', function () {
+            const extra = JSON.stringify({
+                headers: {
+                    'X-Empty': '',
+                    'X-Number': 1,
+                },
+                noGRPCHeader: false,
+                xPaddingBytes: 128,
+                xPaddingObfsMode: false,
+                xPaddingKey: '',
+                xPaddingHeader: '',
+                xPaddingPlacement: '',
+                xPaddingMethod: '',
+                uplinkHTTPMethod: '',
+                sessionIDPlacement: 'header',
+                sessionIDKey: 'X-Session-ID',
+                sessionPlacement: 'query',
+                sessionKey: 'legacy-session',
+                seqPlacement: '',
+                seqKey: '',
+                uplinkDataPlacement: '',
+                uplinkDataKey: '',
+                downloadSettings: {
+                    network: 'xhttp',
+                    xhttpSettings: {
+                        headers: {
+                            'X-Download-Empty': '',
+                        },
+                        noGRPCHeader: false,
+                        xPaddingBytes: 32,
+                        xPaddingObfsMode: false,
+                        sessionIDPlacement: 'query',
+                        sessionIDKey: 'x_session_id',
+                    },
+                },
+            });
+            const proxy = parseOne(
+                `vless://${UUID}@vless-xhttp.example.com:443?type=xhttp&security=tls&host=cdn.example.com&path=%2Fxhttp&mode=stream-up&extra=${encodeURIComponent(
+                    extra,
+                )}#VLESS%20XHTTP%20Typed%20Extra`,
+            );
+
+            expectSubset(proxy, {
+                type: 'vless',
+                name: 'VLESS XHTTP Typed Extra',
+                server: 'vless-xhttp.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                network: 'xhttp',
+                'xhttp-opts': {
+                    mode: 'stream-up',
+                    path: '/xhttp',
+                    host: 'cdn.example.com',
+                    headers: {
+                        'X-Empty': '',
+                    },
+                    'x-padding-bytes': '128',
+                    'session-placement': 'header',
+                    'session-key': 'X-Session-ID',
+                    'download-settings': {
+                        network: 'xhttp',
+                        headers: {
+                            'X-Download-Empty': '',
+                        },
+                        'x-padding-bytes': '32',
+                        'session-placement': 'query',
+                        'session-key': 'x_session_id',
+                    },
+                },
+            });
+            expect(proxy['xhttp-opts']).to.not.have.property('no-grpc-header');
+            expect(proxy['xhttp-opts']).to.not.have.property(
+                'x-padding-obfs-mode',
+            );
+            expect(proxy['xhttp-opts']).to.not.have.property('x-padding-key');
+            expect(proxy['xhttp-opts']).to.not.have.property(
+                'x-padding-header',
+            );
+            expect(proxy['xhttp-opts']).to.not.have.property(
+                'x-padding-placement',
+            );
+            expect(proxy['xhttp-opts']).to.not.have.property(
+                'x-padding-method',
+            );
+            expect(proxy['xhttp-opts']).to.not.have.property(
+                'uplink-http-method',
+            );
+            expect(proxy['xhttp-opts']).to.not.have.property('seq-placement');
+            expect(proxy['xhttp-opts']).to.not.have.property('seq-key');
+            expect(proxy['xhttp-opts']).to.not.have.property(
+                'uplink-data-placement',
+            );
+            expect(proxy['xhttp-opts']).to.not.have.property('uplink-data-key');
+            expect(
+                proxy['xhttp-opts']?.['download-settings'],
+            ).to.not.have.property('no-grpc-header');
+            expect(
+                proxy['xhttp-opts']?.['download-settings'],
+            ).to.not.have.property('x-padding-obfs-mode');
+            expect(proxy._extra_unsupported).to.deep.equal({
+                headers: {
+                    'X-Number': 1,
+                },
+                noGRPCHeader: false,
+                xPaddingObfsMode: false,
+                downloadSettings: {
+                    xhttpSettings: {
+                        noGRPCHeader: false,
+                        xPaddingObfsMode: false,
+                    },
+                },
+            });
+        });
+
         it('parses nested xhttp download TLS ECH DNS fields into mihomo sidecar fields', function () {
             const extra = JSON.stringify({
                 downloadSettings: {
@@ -1802,8 +2141,9 @@ describe('VMess and VLESS parser coverage', function () {
             expect(proxy).to.not.have.property('_extra_unsupported');
         });
 
-        it('keeps malformed xhttp VLESS uplinkChunkSize values in _extra_unsupported', function () {
+        it('keeps malformed xhttp VLESS range values in _extra_unsupported', function () {
             const extra = JSON.stringify({
+                xPaddingBytes: 'fast',
                 uplinkChunkSize: 'fast',
                 downloadSettings: {
                     address: 'download.example.com',
@@ -1811,6 +2151,7 @@ describe('VMess and VLESS parser coverage', function () {
                     security: 'tls',
                     xhttpSettings: {
                         path: '/download',
+                        xPaddingBytes: 'faster',
                         uplinkChunkSize: 'faster',
                     },
                 },
@@ -1836,16 +2177,22 @@ describe('VMess and VLESS parser coverage', function () {
                     },
                 },
             });
+            expect(proxy['xhttp-opts']).to.not.have.property('x-padding-bytes');
             expect(proxy['xhttp-opts']).to.not.have.property(
                 'uplink-chunk-size',
             );
             expect(
                 proxy['xhttp-opts']?.['download-settings'],
+            ).to.not.have.property('x-padding-bytes');
+            expect(
+                proxy['xhttp-opts']?.['download-settings'],
             ).to.not.have.property('uplink-chunk-size');
             expect(proxy._extra_unsupported).to.deep.equal({
+                xPaddingBytes: 'fast',
                 uplinkChunkSize: 'fast',
                 downloadSettings: {
                     xhttpSettings: {
+                        xPaddingBytes: 'faster',
                         uplinkChunkSize: 'faster',
                     },
                 },
@@ -1932,7 +2279,7 @@ describe('VMess and VLESS parser coverage', function () {
                     host: 'cdn.example.com',
                     'no-grpc-header': true,
                     'x-padding-bytes': '64-128',
-                    'sc-max-each-post-bytes': 1000000,
+                    'sc-max-each-post-bytes': '500000-1000000',
                     'reuse-settings': {
                         'max-connections': '0',
                         'max-concurrency': '16-32',
@@ -1989,57 +2336,15 @@ describe('VMess and VLESS parser coverage', function () {
             });
         });
 
-        it('parses xhttp VLESS shares with zero-lower-bound scMaxEachPostBytes range', function () {
-            const extra = JSON.stringify({
-                noGRPCHeader: true,
-                xPaddingBytes: '64-128',
-                scMaxEachPostBytes: '0-1000000',
-                xmux: {
-                    maxConnections: 0,
-                    maxConcurrency: '16-32',
-                    cMaxReuseTimes: '64-128',
-                    hMaxRequestTimes: '600-900',
-                    hMaxReusableSecs: '1800-3000',
-                },
-            });
-            const proxy = parseOne(
-                `vless://${UUID}@vless-xhttp.example.com:443?type=xhttp&security=tls&host=cdn.example.com&path=%2Fxhttp&mode=stream-up&extra=${encodeURIComponent(
-                    extra,
-                )}#VLESS%20XHTTP%20Zero%20Lower%20Bound`,
-            );
-
-            expectSubset(proxy, {
-                type: 'vless',
-                name: 'VLESS XHTTP Zero Lower Bound',
-                server: 'vless-xhttp.example.com',
-                port: 443,
-                uuid: UUID,
-                tls: true,
-                network: 'xhttp',
-                'xhttp-opts': {
-                    mode: 'stream-up',
-                    path: '/xhttp',
-                    host: 'cdn.example.com',
-                    'no-grpc-header': true,
-                    'x-padding-bytes': '64-128',
-                    'sc-max-each-post-bytes': 1000000,
-                    'reuse-settings': {
-                        'max-connections': '0',
-                        'max-concurrency': '16-32',
-                        'c-max-reuse-times': '64-128',
-                        'h-max-request-times': '600-900',
-                        'h-max-reusable-secs': '1800-3000',
-                    },
-                },
-            });
-        });
-
         it('ignores invalid xhttp VLESS scMaxEachPostBytes values', function () {
             const invalidValues = [
                 '1.5',
                 1.5,
                 '0',
                 0,
+                '0-1000000',
+                '+0-+1000000',
+                '000-1000000',
                 'fast',
                 '10-1',
                 '9007199254740993',
@@ -2584,6 +2889,59 @@ describe('Platform raw-format parser coverage', function () {
                 },
             },
             {
+                title: 'parses shadowsocks 2022 obfs http lines',
+                input: 'Loon SS2022=shadowsocks,loon-ss2022.example.com,8388,2022-blake3-aes-128-gcm,"server-key:user-key",obfs-name=http,obfs-host=obfs.example.com,obfs-uri=/',
+                expected: {
+                    type: 'ss',
+                    name: 'Loon SS2022',
+                    server: 'loon-ss2022.example.com',
+                    port: 8388,
+                    cipher: '2022-blake3-aes-128-gcm',
+                    password: 'server-key:user-key',
+                    plugin: 'obfs',
+                    'plugin-opts': {
+                        mode: 'http',
+                        host: 'obfs.example.com',
+                        path: '/',
+                    },
+                },
+            },
+            {
+                title: 'parses shadowsocks shadow-tls alpn into plugin opts',
+                input: 'Loon ShadowTLS ALPN=shadowsocks,loon-st.example.com,8388,aes-128-gcm,"secret",shadow-tls-password=shadow-pass,shadow-tls-sni=mask.example.com,shadow-tls-version=3,alpn="h2,http/1.1"',
+                expected: {
+                    type: 'ss',
+                    name: 'Loon ShadowTLS ALPN',
+                    server: 'loon-st.example.com',
+                    port: 8388,
+                    cipher: 'aes-128-gcm',
+                    password: 'secret',
+                    plugin: 'shadow-tls',
+                    'plugin-opts': {
+                        host: 'mask.example.com',
+                        password: 'shadow-pass',
+                        version: 3,
+                        alpn: ['h2', 'http/1.1'],
+                    },
+                },
+            },
+            {
+                title: 'parses shadowsocks shadow-tls tls-profile into internal loon fields',
+                input: 'Loon ShadowTLS TLS Profile=shadowsocks,loon-st.example.com,8388,aes-128-gcm,"secret",shadow-tls-password=shadow-pass,shadow-tls-sni=mask.example.com,shadow-tls-version=3,tls-profile=ios26',
+                expected: {
+                    type: 'ss',
+                    name: 'Loon ShadowTLS TLS Profile',
+                    plugin: 'shadow-tls',
+                    'plugin-opts': {
+                        host: 'mask.example.com',
+                        password: 'shadow-pass',
+                        version: 3,
+                    },
+                    _loon_tls_profile: 'ios26',
+                    'client-fingerprint': 'ios',
+                },
+            },
+            {
                 title: 'parses shadowsocksr lines',
                 input: 'Loon SSR=shadowsocksr,loon-ssr.example.com,8389,aes-256-cfb,"secret",protocol=auth_chain_b,protocol-param=device-id,obfs=tls1.2_ticket_fastauth,obfs-param=cdn.example.com',
                 expected: {
@@ -2601,7 +2959,7 @@ describe('Platform raw-format parser coverage', function () {
             },
             {
                 title: 'parses vmess http tls lines',
-                input: `Loon VMess=vmess,loon-vmess.example.com,443,auto,"${UUID}",transport=http,host=cdn.example.com,path=/http,over-tls=true,tls-name=sni.example.com,skip-cert-verify=true,alterId=0`,
+                input: `Loon VMess=vmess,loon-vmess.example.com,443,auto,"${UUID}",transport=http,host=cdn.example.com,path=/http,over-tls=true,tls-name=sni.example.com,skip-cert-verify=true,tls-profile=chrome,alpn="http/1.1,h2,h3",alterId=0`,
                 expected: {
                     type: 'vmess',
                     name: 'Loon VMess',
@@ -2613,6 +2971,9 @@ describe('Platform raw-format parser coverage', function () {
                     tls: true,
                     sni: 'sni.example.com',
                     'skip-cert-verify': true,
+                    _loon_tls_profile: 'chrome',
+                    'client-fingerprint': 'chrome',
+                    alpn: ['http/1.1', 'h2', 'h3'],
                     network: 'http',
                     'http-opts': {
                         path: ['/http'],
@@ -2620,6 +2981,52 @@ describe('Platform raw-format parser coverage', function () {
                             Host: ['cdn.example.com'],
                         },
                     },
+                },
+            },
+            {
+                title: 'parses vmess reality lines',
+                input: `Loon VMess Reality=vmess,loon-vmess-reality.example.com,443,auto,"${UUID}",transport=tcp,over-tls=true,sni=sni.example.com,skip-cert-verify=true,public-key=vmess-pubkey,short-id=01,alterId=0`,
+                expected: {
+                    type: 'vmess',
+                    name: 'Loon VMess Reality',
+                    server: 'loon-vmess-reality.example.com',
+                    port: 443,
+                    cipher: 'auto',
+                    uuid: UUID,
+                    alterId: 0,
+                    tls: true,
+                    sni: 'sni.example.com',
+                    'skip-cert-verify': true,
+                    'reality-opts': {
+                        'public-key': 'vmess-pubkey',
+                        'short-id': '01',
+                    },
+                },
+            },
+            {
+                title: 'canonicalizes Loon vmess chacha20 security',
+                input: `Loon VMess Chacha=vmess,loon-vmess-chacha.example.com,443,chacha20-ietf-poly1305,"${UUID}"`,
+                expected: {
+                    type: 'vmess',
+                    name: 'Loon VMess Chacha',
+                    server: 'loon-vmess-chacha.example.com',
+                    port: 443,
+                    cipher: 'chacha20-poly1305',
+                    uuid: UUID,
+                    alterId: 0,
+                },
+            },
+            {
+                title: 'defaults invalid Loon vmess security to auto',
+                input: `Loon VMess Invalid=vmess,loon-vmess-invalid.example.com,443,unknown-cipher,"${UUID}"`,
+                expected: {
+                    type: 'vmess',
+                    name: 'Loon VMess Invalid',
+                    server: 'loon-vmess-invalid.example.com',
+                    port: 443,
+                    cipher: 'auto',
+                    uuid: UUID,
+                    alterId: 0,
                 },
             },
             {
@@ -2670,6 +3077,24 @@ describe('Platform raw-format parser coverage', function () {
                 },
             },
             {
+                title: 'parses trojan reality lines',
+                input: 'Loon Trojan Reality=trojan,loon-trojan-reality.example.com,443,"secret",over-tls=true,sni=sni.example.com,skip-cert-verify=true,public-key=trojan-pubkey,short-id=02',
+                expected: {
+                    type: 'trojan',
+                    name: 'Loon Trojan Reality',
+                    server: 'loon-trojan-reality.example.com',
+                    port: 443,
+                    password: 'secret',
+                    tls: true,
+                    sni: 'sni.example.com',
+                    'skip-cert-verify': true,
+                    'reality-opts': {
+                        'public-key': 'trojan-pubkey',
+                        'short-id': '02',
+                    },
+                },
+            },
+            {
                 title: 'parses anytls lines',
                 input: 'Loon AnyTLS=anytls,loon-anytls.example.com,443,"secret",transport=ws,host=cdn.example.com,path=/anytls,over-tls=true,tls-name=sni.example.com,skip-cert-verify=true,idle-session-timeout=30,max-stream-count=16',
                 expected: {
@@ -2693,6 +3118,24 @@ describe('Platform raw-format parser coverage', function () {
                 },
             },
             {
+                title: 'parses anytls reality lines',
+                input: 'Loon AnyTLS Reality=anytls,loon-anytls-reality.example.com,443,"secret",over-tls=true,sni=sni.example.com,skip-cert-verify=true,public-key=anytls-pubkey,short-id=03',
+                expected: {
+                    type: 'anytls',
+                    name: 'Loon AnyTLS Reality',
+                    server: 'loon-anytls-reality.example.com',
+                    port: 443,
+                    password: 'secret',
+                    tls: true,
+                    sni: 'sni.example.com',
+                    'skip-cert-verify': true,
+                    'reality-opts': {
+                        'public-key': 'anytls-pubkey',
+                        'short-id': '03',
+                    },
+                },
+            },
+            {
                 title: 'parses hysteria2 lines',
                 input: 'Loon Hysteria2=hysteria2,loon-hy2.example.com,443,"secret",tls-name=peer.example.com,skip-cert-verify=true,download-bandwidth=100,salamander-password=mask,ecn=true',
                 expected: {
@@ -2707,6 +3150,21 @@ describe('Platform raw-format parser coverage', function () {
                     obfs: 'salamander',
                     'obfs-password': 'mask',
                     ecn: true,
+                },
+            },
+            {
+                title: 'parses hysteria2 port hopping lines',
+                input: 'Loon Hysteria2 Port Hopping=hysteria2,loon-hy2.example.com,443,"secret",server-ports="1000,2000-3000,5000",hop-interval=30,tls-name=peer.example.com,skip-cert-verify=true',
+                expected: {
+                    type: 'hysteria2',
+                    name: 'Loon Hysteria2 Port Hopping',
+                    server: 'loon-hy2.example.com',
+                    port: 443,
+                    ports: '1000,2000-3000,5000',
+                    'hop-interval': 30,
+                    password: 'secret',
+                    sni: 'peer.example.com',
+                    'skip-cert-verify': true,
                 },
             },
             {
@@ -2829,6 +3287,53 @@ describe('Platform raw-format parser coverage', function () {
                 },
             },
         ]);
+
+        it('normalizes Loon tls-profile values into client fingerprints', function () {
+            const cases = [
+                ['default'],
+                ['chrome', 'chrome'],
+                ['ios18', 'ios'],
+                ['ios26', 'ios'],
+            ];
+
+            for (const [profile, fingerprint] of cases) {
+                const proxy = parseOne(
+                    `Loon ${profile}=vmess,loon-${profile}.example.com,443,auto,"${UUID}",over-tls=true,tls-profile=${profile},alterId=0`,
+                );
+
+                expect(proxy._loon_tls_profile).to.equal(profile);
+                if (fingerprint) {
+                    expect(proxy['client-fingerprint']).to.equal(fingerprint);
+                } else {
+                    expect(proxy).to.not.have.property('client-fingerprint');
+                }
+            }
+        });
+
+        it('keeps unknown Loon tls-profile values out of client-fingerprint', function () {
+            const proxy = parseOne(
+                `Loon Unknown Profile=vmess,loon-unknown.example.com,443,auto,"${UUID}",over-tls=true,tls-profile=unknown-browser,alterId=0`,
+            );
+
+            expect(proxy._loon_tls_profile).to.equal('unknown-browser');
+            expect(proxy).to.not.have.property('client-fingerprint');
+        });
+
+        it('rejects hysteria2 hop interval ranges', function () {
+            expect(
+                parseAll(
+                    'Loon Hysteria2 Hop Range=hysteria2,loon-hy2.example.com,443,"secret",hop-interval=15-30',
+                ),
+            ).to.have.length(0);
+        });
+
+        it('rejects Loon shadow-tls version 1 lines', function () {
+            expect(
+                parseAll(
+                    'Loon ShadowTLS Invalid=shadowsocks,loon-invalid.example.com,8388,aes-128-gcm,"secret",shadow-tls-password=shadow-pass,shadow-tls-sni=mask.example.com,shadow-tls-version=1,alpn="h2"',
+                ),
+            ).to.have.length(0);
+        });
     });
 
     describe('Surge raw inputs', function () {
@@ -2878,6 +3383,38 @@ describe('Platform raw-format parser coverage', function () {
                 },
             },
             {
+                title: 'parses trust-tunnel lines with double-quoted max-streams',
+                input: 'Surge TrustTunnel Max Streams = trust-tunnel,surge-trust.example.com,443,username=user,password=secret,headers=X-Client:Surge,max-streams="3",sni=sni.example.com,skip-cert-verify=true,reuse=true',
+                expected: {
+                    type: 'trusttunnel',
+                    name: 'Surge TrustTunnel Max Streams',
+                    server: 'surge-trust.example.com',
+                    port: 443,
+                    username: 'user',
+                    password: 'secret',
+                    tls: true,
+                    headers: {
+                        'X-Client': 'Surge',
+                    },
+                    'max-streams': 3,
+                    sni: 'sni.example.com',
+                    'skip-cert-verify': true,
+                    reuse: true,
+                },
+            },
+            {
+                title: 'parses trust-tunnel lines with single-quoted max-streams',
+                input: "Surge TrustTunnel Single Max Streams = trust-tunnel,surge-trust-single.example.com,443,max-streams='2'",
+                expected: {
+                    type: 'trusttunnel',
+                    name: 'Surge TrustTunnel Single Max Streams',
+                    server: 'surge-trust-single.example.com',
+                    port: 443,
+                    tls: true,
+                    'max-streams': 2,
+                },
+            },
+            {
                 title: 'parses h2-connect lines with dynamic headers',
                 input: 'Surge H2 = h2-connect,h2.example.com,443,headers=X-Padding:<random-string(16-32)>,sni=sni.example.com,skip-cert-verify=true',
                 expected: {
@@ -2894,8 +3431,25 @@ describe('Platform raw-format parser coverage', function () {
                 },
             },
             {
-                title: 'keeps quoted Surge headers with semicolons inside User-Agent values',
-                input: '1=http,163.177.17.6,443,headers="Host:153.3.236.22:443;X-T5-Auth:683556433;Connection:Keep-Alive;User-Agent:okhttp/3.11.0 Dalvik/2.1.0 (Linux; U; Android 11; Redmi K30 5G Build/RKQ1.200826.002) baiduboxapp/11.0.5.12 (Baidu; P1 11)"',
+                title: 'parses h2-connect lines with max-streams',
+                input: 'Surge H2 Max Streams = h2-connect,h2.example.com,443,headers=X-Padding:<random-string(16-32)>,max-streams=1,sni=sni.example.com,skip-cert-verify=true',
+                expected: {
+                    type: 'h2-connect',
+                    name: 'Surge H2 Max Streams',
+                    server: 'h2.example.com',
+                    port: 443,
+                    tls: true,
+                    headers: {
+                        'X-Padding': '<random-string(16-32)>',
+                    },
+                    'max-streams': 1,
+                    sni: 'sni.example.com',
+                    'skip-cert-verify': true,
+                },
+            },
+            {
+                title: 'keeps quoted Surge headers with nested quoted User-Agent values',
+                input: '1=http,163.177.17.6,443,headers="Host:153.3.236.22:443;X-T5-Auth:683556433;Connection:Keep-Alive;User-Agent:"okhttp/3.11.0 Dalvik/2.1.0 (Linux; U; Android 11; Redmi K30 5G Build/RKQ1.200826.002) baiduboxapp/11.0.5.12 (Baidu; P1 11)""',
                 expected: {
                     type: 'http',
                     name: '1',
@@ -2931,7 +3485,7 @@ describe('Platform raw-format parser coverage', function () {
             },
             {
                 title: 'parses Surge headers with nested quote values containing commas',
-                input: `Surge Nested Headers = https,nested.example.com,443,headers="Host:"nested.example.com";X-Comma:"a,b";User-Agent:"client/1.0 (Linux; U; Android 11)"",sni=sni.example.com`,
+                input: `Surge Nested Headers = https,nested.example.com,443,headers="Host:"nested.example.com" ; X-Comma:"a,b" ; User-Agent:"client/1.0 (Linux; U; Android 11)"",sni=sni.example.com`,
                 expected: {
                     type: 'http',
                     name: 'Surge Nested Headers',
@@ -3033,6 +3587,60 @@ describe('Platform raw-format parser coverage', function () {
                 },
             },
             {
+                title: 'canonicalizes Surge vmess chacha20 encrypt-method',
+                input: `Surge VMess Chacha = vmess,surge-vmess-chacha.example.com,443,username=${UUID},encrypt-method=chacha20-ietf-poly1305,vmess-aead=true`,
+                expected: {
+                    type: 'vmess',
+                    name: 'Surge VMess Chacha',
+                    server: 'surge-vmess-chacha.example.com',
+                    port: 443,
+                    uuid: UUID,
+                    cipher: 'chacha20-poly1305',
+                    aead: true,
+                    alterId: 0,
+                },
+            },
+            {
+                title: 'defaults invalid Surge vmess encrypt-method to auto',
+                input: `Surge VMess Invalid = vmess,surge-vmess-invalid.example.com,443,username=${UUID},encrypt-method=none,vmess-aead=true`,
+                expected: {
+                    type: 'vmess',
+                    name: 'Surge VMess Invalid',
+                    server: 'surge-vmess-invalid.example.com',
+                    port: 443,
+                    uuid: UUID,
+                    cipher: 'auto',
+                    aead: true,
+                    alterId: 0,
+                },
+            },
+            {
+                title: 'parses vmess websocket headers with quoted comma values and pipe separators',
+                input: `Surge VMess WS Headers = vmess,surge-vmess.example.com,443,username=${UUID},ws=true,ws-path=/vmess,ws-headers="Host:"cdn.example.com" | X-Comma:"a,b" | User-Agent:"okhttp/3.11.0 Dalvik/2.1.0 (Linux; U; Android 11)"",skip-cert-verify=true,sni=sni.example.com,tls=true,vmess-aead=true`,
+                expected: {
+                    type: 'vmess',
+                    name: 'Surge VMess WS Headers',
+                    server: 'surge-vmess.example.com',
+                    port: 443,
+                    uuid: UUID,
+                    aead: true,
+                    alterId: 0,
+                    tls: true,
+                    sni: 'sni.example.com',
+                    'skip-cert-verify': true,
+                    network: 'ws',
+                    'ws-opts': {
+                        path: '/vmess',
+                        headers: {
+                            Host: 'cdn.example.com',
+                            'X-Comma': 'a,b',
+                            'User-Agent':
+                                'okhttp/3.11.0 Dalvik/2.1.0 (Linux; U; Android 11)',
+                        },
+                    },
+                },
+            },
+            {
                 title: 'parses trojan websocket tls lines',
                 input: 'Surge Trojan = trojan,surge-trojan.example.com,443,password=secret,ws=true,ws-path=/trojan,ws-headers=Host:cdn.example.com,skip-cert-verify=true,sni=sni.example.com,tls=true',
                 expected: {
@@ -3105,6 +3713,39 @@ describe('Platform raw-format parser coverage', function () {
                 },
             },
             {
+                title: 'parses snell v6 mode lines',
+                input: 'Surge Snell v6 = snell,surge-snell.example.com,443,psk=secret,version=6,mode=unshaped,udp-relay=true',
+                expected: {
+                    type: 'snell',
+                    name: 'Surge Snell v6',
+                    server: 'surge-snell.example.com',
+                    port: 443,
+                    psk: 'secret',
+                    version: 6,
+                    mode: 'unshaped',
+                    udp: true,
+                },
+            },
+            {
+                title: 'parses snell shadow-tls alpn into plugin opts',
+                input: 'Surge Snell ShadowTLS ALPN = snell,surge-snell-alpn.example.com,443,psk=secret,version=5,alpn="h2,http/1.1",shadow-tls-password=shadow-pass,shadow-tls-sni=mask.example.com,shadow-tls-version=3',
+                expected: {
+                    type: 'snell',
+                    name: 'Surge Snell ShadowTLS ALPN',
+                    server: 'surge-snell-alpn.example.com',
+                    port: 443,
+                    psk: 'secret',
+                    version: 5,
+                    plugin: 'shadow-tls',
+                    'plugin-opts': {
+                        host: 'mask.example.com',
+                        password: 'shadow-pass',
+                        version: 3,
+                        alpn: ['h2', 'http/1.1'],
+                    },
+                },
+            },
+            {
                 title: 'parses tuic v5 lines',
                 input: `Surge TUIC = tuic-v5,surge-tuic.example.com,443,uuid=${UUID},password=secret,sni=sni.example.com,skip-cert-verify=true,alpn=h3,ecn=true,port-hopping=9000;9002-9004`,
                 expected: {
@@ -3150,6 +3791,20 @@ describe('Platform raw-format parser coverage', function () {
                 },
             },
             {
+                title: 'parses hysteria2 gecko obfs lines',
+                input: 'Surge Hysteria2 Gecko = hysteria2,surge-hy2.example.com,443,password=secret,gecko-password="mask",sni=peer.example.com',
+                expected: {
+                    type: 'hysteria2',
+                    name: 'Surge Hysteria2 Gecko',
+                    server: 'surge-hy2.example.com',
+                    port: 443,
+                    password: 'secret',
+                    obfs: 'gecko',
+                    'obfs-password': 'mask',
+                    sni: 'peer.example.com',
+                },
+            },
+            {
                 title: 'parses external definitions with exec, args, local-port and addresses',
                 input: 'Surge External = external, exec="/usr/bin/ssh", local-port="1080", args="-D", args="localhost:1080", addresses="[2001:db8::1]", addresses="1.1.1.1"',
                 expected: {
@@ -3162,5 +3817,115 @@ describe('Platform raw-format parser coverage', function () {
                 },
             },
         ]);
+
+        it('parses quoted alpn lists for Surge TLS protocol lines', function () {
+            const alpn = ['http/1.1', 'h2', 'h3'];
+            const cases = [
+                `Surge VMess ALPN = vmess,vmess-alpn.example.com,443,username=${UUID},tls=true,vmess-aead=true,alpn="http/1.1,h2,h3"`,
+                `Surge Trojan ALPN = trojan,trojan-alpn.example.com,443,password=secret,alpn='http/1.1,h2,h3'`,
+                `Surge HTTPS ALPN = https,https-alpn.example.com,443,alpn="http/1.1,h2,h3"`,
+                `Surge H2 ALPN = h2-connect,h2-alpn.example.com,443,alpn='http/1.1,h2,h3'`,
+                `Surge SOCKS5 ALPN = socks5-tls,socks-alpn.example.com,1080,alpn="http/1.1,h2,h3"`,
+                `Surge AnyTLS ALPN = anytls,anytls-alpn.example.com,443,password=secret,alpn='http/1.1,h2,h3'`,
+                `Surge TrustTunnel ALPN = trust-tunnel,trust-alpn.example.com,443,alpn="http/1.1,h2,h3"`,
+                `Surge TUIC ALPN = tuic-v5,tuic-alpn.example.com,443,uuid=${UUID},password=secret,alpn='http/1.1,h2,h3'`,
+                `Surge Hysteria2 ALPN = hysteria2,hy2-alpn.example.com,443,password=secret,alpn="http/1.1,h2,h3"`,
+            ];
+
+            for (const input of cases) {
+                expectSubset(parseOne(input), { alpn });
+            }
+        });
+
+        it('parses Surge server-cert-verify-name for TLS protocol lines', function () {
+            const cases = [
+                {
+                    input: `Surge VMess Verify Name = vmess,vmess-verify.example.com,443,username=${UUID},tls=true,vmess-aead=true,server-cert-verify-name=verify.example.com`,
+                    expected: { 'name-cert-verify': 'verify.example.com' },
+                },
+                {
+                    input: `Surge Trojan Verify Name = trojan,trojan-verify.example.com,443,password=secret,server-cert-verify-name='verify.example.com'`,
+                    expected: { 'name-cert-verify': 'verify.example.com' },
+                },
+                {
+                    input: `Surge HTTPS Verify Name = https,https-verify.example.com,443,sni=sni.example.com,server-cert-verify-name="verify.example.com"`,
+                    expected: {
+                        sni: 'sni.example.com',
+                        'name-cert-verify': 'verify.example.com',
+                    },
+                },
+                {
+                    input: `Surge H2 Verify Name = h2-connect,h2-verify.example.com,443,server-cert-verify-name='verify.example.com'`,
+                    expected: { 'name-cert-verify': 'verify.example.com' },
+                },
+                {
+                    input: `Surge SOCKS5 Verify Name = socks5-tls,socks-verify.example.com,1080,server-cert-verify-name="verify.example.com"`,
+                    expected: { 'name-cert-verify': 'verify.example.com' },
+                },
+                {
+                    input: `Surge AnyTLS Verify Name = anytls,anytls-verify.example.com,443,password=secret,server-cert-verify-name=verify.example.com`,
+                    expected: { 'name-cert-verify': 'verify.example.com' },
+                },
+                {
+                    input: `Surge TrustTunnel Verify Name = trust-tunnel,trust-verify.example.com,443,server-cert-verify-name='verify.example.com'`,
+                    expected: { 'name-cert-verify': 'verify.example.com' },
+                },
+                {
+                    input: `Surge TUIC Verify Name = tuic,tuic-verify.example.com,443,token=secret,server-cert-verify-name="verify.example.com"`,
+                    expected: { 'name-cert-verify': 'verify.example.com' },
+                },
+                {
+                    input: `Surge TUIC v5 Verify Name = tuic-v5,tuic-v5-verify.example.com,443,uuid=${UUID},password=secret,server-cert-verify-name=verify.example.com`,
+                    expected: { 'name-cert-verify': 'verify.example.com' },
+                },
+                {
+                    input: `Surge Hysteria2 Verify Name = hysteria2,hy2-verify.example.com,443,password=secret,server-cert-verify-name='verify.example.com'`,
+                    expected: { 'name-cert-verify': 'verify.example.com' },
+                },
+            ];
+
+            for (const { input, expected } of cases) {
+                expectSubset(parseOne(input), expected);
+            }
+        });
+
+        it('rejects Surge shadow-tls version 1 lines', function () {
+            expect(
+                parseAll(
+                    'Surge ShadowTLS Invalid = snell,surge-invalid.example.com,443,psk=secret,version=5,shadow-tls-password=shadow-pass,shadow-tls-sni=mask.example.com,shadow-tls-version=1,alpn="h2"',
+                ),
+            ).to.have.length(0);
+        });
+
+        it('normalizes Mihomo Snell shadow-tls obfs form into plugin opts', function () {
+            const [proxy] = parseAll(`proxies:
+  - name: Mihomo Snell ShadowTLS
+    type: snell
+    server: mihomo-snell.example.com
+    port: 443
+    psk: secret
+    version: 4
+    obfs-opts:
+      mode: shadow-tls
+      host: mask.example.com
+      password: shadow-pass
+      version: 2
+      alpn:
+        - h2
+        - http/1.1`);
+
+            expectSubset(proxy, {
+                type: 'snell',
+                name: 'Mihomo Snell ShadowTLS',
+                plugin: 'shadow-tls',
+                'plugin-opts': {
+                    host: 'mask.example.com',
+                    password: 'shadow-pass',
+                    version: 2,
+                    alpn: ['h2', 'http/1.1'],
+                },
+            });
+            expect(proxy).to.not.have.property('obfs-opts');
+        });
     });
 });

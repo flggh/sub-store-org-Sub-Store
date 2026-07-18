@@ -92,7 +92,11 @@ function restoreArchivedEntry(entry) {
             return createTokenItem(snapshot, {
                 mode: snapshot.mode,
                 expiresIn: snapshot.expiresIn,
+                expiresValue: snapshot.expiresValue,
+                expiresUnit: snapshot.expiresUnit,
                 exp: snapshot.exp,
+                count: snapshot.count,
+                usedCount: snapshot.usedCount,
             });
         default:
             throw new RequestInvalidError(

@@ -433,6 +433,590 @@ describe('Proxy text producers', function () {
         );
     });
 
+    it('produces Loon VMess, Trojan, and AnyTLS reality lines', function () {
+        const output = produceExternal('Loon', [
+            {
+                type: 'vmess',
+                name: 'Loon VMess Reality',
+                server: 'vmess.example.com',
+                port: 443,
+                cipher: 'auto',
+                uuid: UUID,
+                alterId: 0,
+                tls: true,
+                sni: 'sni.example.com',
+                'reality-opts': {
+                    'public-key': 'vmess-pubkey',
+                    'short-id': '01',
+                },
+                'skip-cert-verify': true,
+            },
+            {
+                type: 'trojan',
+                name: 'Loon Trojan Reality',
+                server: 'trojan.example.com',
+                port: 443,
+                password: 'secret',
+                sni: 'sni.example.com',
+                'reality-opts': {
+                    'public-key': 'trojan-pubkey',
+                    'short-id': '02',
+                },
+                'skip-cert-verify': true,
+            },
+            {
+                type: 'anytls',
+                name: 'Loon AnyTLS Reality',
+                server: 'anytls.example.com',
+                port: 443,
+                password: 'secret',
+                network: 'tcp',
+                sni: 'sni.example.com',
+                'reality-opts': {
+                    'public-key': 'anytls-pubkey',
+                    'short-id': '03',
+                },
+                'skip-cert-verify': true,
+            },
+        ]);
+
+        expect(output).to.equal(
+            [
+                `Loon VMess Reality=vmess,vmess.example.com,443,auto,"${UUID}",transport=tcp,over-tls=true,skip-cert-verify=true,sni=sni.example.com,public-key="vmess-pubkey",short-id=01,alterId=0`,
+                'Loon Trojan Reality=trojan,trojan.example.com,443,"secret",skip-cert-verify=true,sni=sni.example.com,public-key="trojan-pubkey",short-id=02',
+                'Loon AnyTLS Reality=anytls,anytls.example.com,443,"secret",skip-cert-verify=true,sni=sni.example.com,public-key="anytls-pubkey",short-id=03',
+            ].join('\n'),
+        );
+    });
+
+    it('produces Loon Shadowsocks 2022 simple obfs lines', function () {
+        const output = produceExternal('Loon', [
+            {
+                type: 'ss',
+                name: 'Loon SS2022 HTTP Obfs',
+                server: 'ss2022-http.example.com',
+                port: 8388,
+                cipher: '2022-blake3-aes-128-gcm',
+                password: 'server-key:user-key',
+                plugin: 'obfs',
+                'plugin-opts': {
+                    mode: 'http',
+                    host: 'obfs.example.com',
+                    path: '/',
+                },
+            },
+            {
+                type: 'ss',
+                name: 'Loon SS2022 TLS Obfs',
+                server: 'ss2022-tls.example.com',
+                port: 8389,
+                cipher: '2022-blake3-aes-256-gcm',
+                password: 'server-key:user-key',
+                plugin: 'obfs',
+                'plugin-opts': {
+                    mode: 'tls',
+                    host: 'tls.example.com',
+                    path: '/tls',
+                },
+            },
+        ]);
+
+        expect(output).to.equal(
+            [
+                'Loon SS2022 HTTP Obfs=shadowsocks,ss2022-http.example.com,8388,2022-blake3-aes-128-gcm,"server-key:user-key",obfs-name=http,obfs-host=obfs.example.com,obfs-uri=/',
+                'Loon SS2022 TLS Obfs=shadowsocks,ss2022-tls.example.com,8389,2022-blake3-aes-256-gcm,"server-key:user-key",obfs-name=tls,obfs-host=tls.example.com,obfs-uri=/tls',
+            ].join('\n'),
+        );
+    });
+
+    it('produces Loon Shadowsocks Shadow TLS passwords without quotes', function () {
+        const output = produceExternal('Loon', [
+            {
+                type: 'ss',
+                name: 'Loon SS ShadowTLS Plugin A',
+                server: 'ss.example.com',
+                port: 8388,
+                cipher: 'chacha20-ietf-poly1305',
+                password: 'ss-pass',
+                plugin: 'shadow-tls',
+                'plugin-opts': {
+                    password: 'dzUjK3l+mXO/xxx=',
+                    host: 'p11.douyinpic.com',
+                    version: 3,
+                },
+                udp: true,
+            },
+            {
+                type: 'ss',
+                name: 'Loon SS ShadowTLS Plugin',
+                server: 'ss-plugin.example.com',
+                port: 8388,
+                cipher: 'chacha20-ietf-poly1305',
+                password: 'ss-pass',
+                plugin: 'shadow-tls',
+                'plugin-opts': {
+                    password: 'plugin-shadow-pass',
+                    host: 'mask.example.com',
+                    version: 3,
+                },
+            },
+        ]);
+
+        expect(output).to.equal(
+            [
+                'Loon SS ShadowTLS Plugin A=shadowsocks,ss.example.com,8388,chacha20-ietf-poly1305,"ss-pass",shadow-tls-password=dzUjK3l+mXO/xxx=,shadow-tls-sni=p11.douyinpic.com,shadow-tls-version=3,udp=true',
+                'Loon SS ShadowTLS Plugin=shadowsocks,ss-plugin.example.com,8388,chacha20-ietf-poly1305,"ss-pass",shadow-tls-password=plugin-shadow-pass,shadow-tls-sni=mask.example.com,shadow-tls-version=3',
+            ].join('\n'),
+        );
+    });
+
+    it('prefers plugin-scoped Loon shadow-tls alpn over top-level alpn', function () {
+        const output = produceExternal('Loon', {
+            type: 'ss',
+            name: 'Loon ShadowTLS ALPN',
+            server: 'ss.example.com',
+            port: 8388,
+            cipher: 'chacha20-ietf-poly1305',
+            password: 'ss-pass',
+            plugin: 'shadow-tls',
+            alpn: ['ignored.example'],
+            'plugin-opts': {
+                password: 'shadow-pass',
+                host: 'mask.example.com',
+                version: 3,
+                alpn: ['http/1.1', 'h2'],
+            },
+        });
+
+        expect(output).to.equal(
+            'Loon ShadowTLS ALPN=shadowsocks,ss.example.com,8388,chacha20-ietf-poly1305,"ss-pass",shadow-tls-password=shadow-pass,shadow-tls-sni=mask.example.com,shadow-tls-version=3,alpn="http/1.1,h2"',
+        );
+    });
+
+    it('emits Loon tls-profile for shadow-tls outputs', function () {
+        const output = produceExternal('Loon', {
+            type: 'ss',
+            name: 'Loon ShadowTLS TLS Profile',
+            server: 'ss.example.com',
+            port: 8388,
+            cipher: 'chacha20-ietf-poly1305',
+            password: 'ss-pass',
+            plugin: 'shadow-tls',
+            _loon_tls_profile: 'ios26',
+            'plugin-opts': {
+                password: 'shadow-pass',
+                host: 'mask.example.com',
+                version: 3,
+            },
+        });
+
+        expect(output).to.equal(
+            'Loon ShadowTLS TLS Profile=shadowsocks,ss.example.com,8388,chacha20-ietf-poly1305,"ss-pass",shadow-tls-password=shadow-pass,shadow-tls-sni=mask.example.com,shadow-tls-version=3,tls-profile=ios26',
+        );
+    });
+
+    it('emits Loon tls-profile and alpn for TLS protocol outputs', function () {
+        const alpn = ['http/1.1', 'h2', 'h3'];
+        const output = produceExternal('Loon', [
+            {
+                type: 'vmess',
+                name: 'Loon VMess TLS',
+                server: 'vmess.example.com',
+                port: 443,
+                cipher: 'auto',
+                uuid: UUID,
+                alterId: 0,
+                tls: true,
+                sni: 'sni.example.com',
+                'client-fingerprint': 'chrome',
+                alpn,
+            },
+            {
+                type: 'vless',
+                name: 'Loon VLESS TLS',
+                server: 'vless.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                sni: 'sni.example.com',
+                'client-fingerprint': 'chrome',
+                alpn,
+            },
+            {
+                type: 'vless',
+                name: 'Loon VLESS Reality',
+                server: 'vless-reality.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                sni: 'sni.example.com',
+                flow: 'xtls-rprx-vision',
+                'reality-opts': {
+                    'public-key': 'pubkey',
+                    'short-id': '08',
+                },
+                'client-fingerprint': 'chrome',
+                alpn,
+            },
+            {
+                type: 'vless',
+                name: 'Loon VLESS XTLS',
+                server: 'vless-xtls.example.com',
+                port: 443,
+                uuid: UUID,
+                flow: 'xtls-rprx-vision',
+                sni: 'sni.example.com',
+                'client-fingerprint': 'chrome',
+                alpn,
+            },
+            {
+                type: 'trojan',
+                name: 'Loon Trojan TLS',
+                server: 'trojan.example.com',
+                port: 443,
+                password: 'secret',
+                'client-fingerprint': 'chrome',
+                alpn,
+            },
+            {
+                type: 'anytls',
+                name: 'Loon AnyTLS Profile',
+                server: 'anytls.example.com',
+                port: 443,
+                password: 'secret',
+                'client-fingerprint': 'chrome',
+                alpn,
+            },
+            {
+                type: 'http',
+                name: 'Loon HTTPS Profile',
+                server: 'https.example.com',
+                port: 443,
+                tls: true,
+                'client-fingerprint': 'chrome',
+                alpn,
+            },
+            {
+                type: 'socks5',
+                name: 'Loon SOCKS TLS',
+                server: 'socks.example.com',
+                port: 1080,
+                tls: true,
+                'client-fingerprint': 'chrome',
+                alpn,
+            },
+            {
+                type: 'hysteria2',
+                name: 'Loon Hysteria2 Profile',
+                server: 'hy2.example.com',
+                port: 443,
+                password: 'secret',
+                'client-fingerprint': 'chrome',
+                alpn,
+            },
+        ]);
+
+        expect(output.match(/tls-profile=chrome/g)).to.have.length(9);
+        expect(output.match(/alpn="http\/1\.1,h2,h3"/g)).to.have.length(9);
+    });
+
+    it('selects Loon tls-profile before client fingerprint fallback', function () {
+        const buildTrojan = (name, fields) => ({
+            type: 'trojan',
+            name,
+            server: `${name.toLowerCase().replace(/\s+/g, '-')}.example.com`,
+            port: 443,
+            password: 'secret',
+            ...fields,
+        });
+        const output = produceExternal('Loon', [
+            buildTrojan('Loon Source IOS18', {
+                _loon_tls_profile: 'ios18',
+                'client-fingerprint': 'ios',
+            }),
+            buildTrojan('Loon Source Default', {
+                _loon_tls_profile: 'default',
+                'client-fingerprint': 'chrome',
+            }),
+            buildTrojan('Loon Source Chrome', {
+                _loon_tls_profile: 'chrome',
+                'client-fingerprint': 'ios',
+            }),
+            buildTrojan('Loon Fallback Chrome', {
+                'client-fingerprint': 'chrome',
+            }),
+            buildTrojan('Loon Fallback IOS', {
+                'client-fingerprint': 'ios',
+            }),
+        ]);
+
+        expect(output).to.include('Loon Source IOS18=trojan');
+        expect(output).to.include('tls-profile=ios18');
+        expect(output).to.include('tls-profile=default');
+        expect(output).to.include('tls-profile=chrome');
+        expect(output).to.include('tls-profile=ios26');
+        expect(output.match(/tls-profile=/g)).to.have.length(5);
+    });
+
+    it('omits invalid Loon tls-profile fallback values', function () {
+        const buildTrojan = (fingerprint) => ({
+            type: 'trojan',
+            name: `Loon ${fingerprint || 'Blank'} Profile`,
+            server: 'trojan-profile.example.com',
+            port: 443,
+            password: 'secret',
+            'client-fingerprint': fingerprint,
+        });
+        const output = produceExternal('Loon', [
+            buildTrojan('default'),
+            buildTrojan('ios18'),
+            buildTrojan('ios26'),
+            buildTrojan('firefox'),
+            buildTrojan('random'),
+            buildTrojan('chrome120'),
+            buildTrojan(''),
+        ]);
+
+        expect(output).to.not.include('tls-profile=');
+    });
+
+    it('omits Loon tls-profile for non-TLS outputs and empty fingerprints', function () {
+        const output = produceExternal('Loon', [
+            {
+                type: 'http',
+                name: 'Loon HTTP Plain',
+                server: 'http.example.com',
+                port: 80,
+                'client-fingerprint': 'chrome',
+                alpn: ['http/1.1', 'h2'],
+            },
+            {
+                type: 'socks5',
+                name: 'Loon SOCKS Plain',
+                server: 'socks.example.com',
+                port: 1080,
+                'client-fingerprint': 'chrome',
+                alpn: ['http/1.1', 'h2'],
+            },
+            {
+                type: 'vmess',
+                name: 'Loon VMess Plain',
+                server: 'vmess.example.com',
+                port: 80,
+                cipher: 'auto',
+                uuid: UUID,
+                alterId: 0,
+                'client-fingerprint': 'chrome',
+                alpn: ['http/1.1', 'h2'],
+            },
+            {
+                type: 'vless',
+                name: 'Loon VLESS Plain',
+                server: 'vless.example.com',
+                port: 80,
+                uuid: UUID,
+                'client-fingerprint': 'chrome',
+                alpn: ['http/1.1', 'h2'],
+            },
+            {
+                type: 'trojan',
+                name: 'Loon Trojan Empty Profile',
+                server: 'trojan-empty.example.com',
+                port: 443,
+                password: 'secret',
+                'client-fingerprint': '',
+            },
+        ]);
+
+        expect(output).to.not.include('tls-profile=');
+        expect(output).to.not.include('alpn=');
+    });
+
+    it('produces Loon Hysteria2 lines with port hopping', function () {
+        const output = produceExternal('Loon', {
+            type: 'hysteria2',
+            name: 'Loon Hysteria2',
+            server: 'hy2.example.com',
+            port: 443,
+            password: 'secret',
+            ports: '1000,2000-3000,5000',
+            'hop-interval': 30,
+            sni: 'peer.example.com',
+            'skip-cert-verify': true,
+        });
+
+        expect(output).to.equal(
+            'Loon Hysteria2=Hysteria2,hy2.example.com,443,"secret",server-ports="1000,2000-3000,5000",hop-interval=30,tls-name=peer.example.com,skip-cert-verify=true',
+        );
+    });
+
+    it('does not emit empty Loon Hysteria2 port hopping fields', function () {
+        const output = produceExternal('Loon', {
+            type: 'hysteria2',
+            name: 'Loon Hysteria2 Plain',
+            server: 'hy2.example.com',
+            port: 443,
+            password: 'secret',
+            ports: '',
+            'hop-interval': '   ',
+            sni: 'peer.example.com',
+            'skip-cert-verify': true,
+        });
+
+        expect(output).to.equal(
+            'Loon Hysteria2 Plain=Hysteria2,hy2.example.com,443,"secret",tls-name=peer.example.com,skip-cert-verify=true',
+        );
+    });
+
+    it('exports URI Hysteria2 port hopping nodes to Loon fields', function () {
+        const [proxy] = ProxyUtils.parse(
+            'hy2://secret@hy2.example.com:443?mport=1000,2000-3000,5000&hop-interval=30#URI%20Hysteria2',
+        );
+        const output = produceExternal('Loon', proxy);
+
+        expect(output).to.equal(
+            'URI Hysteria2=Hysteria2,hy2.example.com,443,"secret",server-ports="1000,2000-3000,5000",hop-interval=30,tls-name=hy2.example.com,skip-cert-verify=false,fast-open=false,udp=true',
+        );
+    });
+
+    it('emits Surge alpn and server-cert-verify-name for TLS protocol outputs', function () {
+        const alpn = ['http/1.1', 'h2', 'h3'];
+        const nameCertVerify = 'verify.example.com';
+        const output = produceExternal('Surge', [
+            {
+                type: 'vmess',
+                name: 'Surge VMess ALPN',
+                server: 'vmess-alpn.example.com',
+                port: 443,
+                cipher: 'auto',
+                uuid: UUID,
+                alterId: 0,
+                tls: true,
+                alpn,
+                'name-cert-verify': nameCertVerify,
+            },
+            {
+                type: 'trojan',
+                name: 'Surge Trojan ALPN',
+                server: 'trojan-alpn.example.com',
+                port: 443,
+                password: 'secret',
+                alpn,
+                'name-cert-verify': nameCertVerify,
+            },
+            {
+                type: 'http',
+                name: 'Surge HTTPS ALPN',
+                server: 'https-alpn.example.com',
+                port: 443,
+                tls: true,
+                sni: 'sni.example.com',
+                alpn,
+                'name-cert-verify': nameCertVerify,
+            },
+            {
+                type: 'h2-connect',
+                name: 'Surge H2 ALPN',
+                server: 'h2-alpn.example.com',
+                port: 443,
+                alpn,
+                'name-cert-verify': nameCertVerify,
+            },
+            {
+                type: 'socks5',
+                name: 'Surge SOCKS5 ALPN',
+                server: 'socks-alpn.example.com',
+                port: 1080,
+                tls: true,
+                alpn,
+                'name-cert-verify': nameCertVerify,
+            },
+            {
+                type: 'anytls',
+                name: 'Surge AnyTLS ALPN',
+                server: 'anytls-alpn.example.com',
+                port: 443,
+                password: 'secret',
+                alpn,
+                'name-cert-verify': nameCertVerify,
+            },
+            {
+                type: 'trusttunnel',
+                name: 'Surge TrustTunnel ALPN',
+                server: 'trust-alpn.example.com',
+                port: 443,
+                alpn,
+                'name-cert-verify': nameCertVerify,
+            },
+            {
+                type: 'tuic',
+                name: 'Surge TUIC ALPN',
+                server: 'tuic-alpn.example.com',
+                port: 443,
+                uuid: UUID,
+                password: 'secret',
+                alpn,
+                'name-cert-verify': nameCertVerify,
+            },
+            {
+                type: 'hysteria2',
+                name: 'Surge Hysteria2 ALPN',
+                server: 'hy2-alpn.example.com',
+                port: 443,
+                password: 'secret',
+                alpn,
+                'name-cert-verify': nameCertVerify,
+            },
+        ]);
+
+        expect(output.match(/alpn="http\/1\.1,h2,h3"/g)).to.have.length(9);
+        expect(
+            output.match(/server-cert-verify-name="verify\.example\.com"/g),
+        ).to.have.length(9);
+
+        const roundTripped = ProxyUtils.parse(output).find(
+            ({ name }) => name === 'Surge HTTPS ALPN',
+        );
+        expect(roundTripped).to.include({
+            sni: 'sni.example.com',
+            'name-cert-verify': nameCertVerify,
+        });
+    });
+
+    it('omits Surge alpn and server-cert-verify-name for non-TLS outputs', function () {
+        const output = produceExternal('Surge', [
+            {
+                type: 'vmess',
+                name: 'Surge VMess Plain ALPN',
+                server: 'vmess-plain-alpn.example.com',
+                port: 80,
+                uuid: UUID,
+                alterId: 0,
+                alpn: ['http/1.1', 'h2'],
+                'name-cert-verify': 'verify.example.com',
+            },
+            {
+                type: 'http',
+                name: 'Surge HTTP Plain ALPN',
+                server: 'http-plain-alpn.example.com',
+                port: 80,
+                alpn: ['http/1.1', 'h2'],
+                'name-cert-verify': 'verify.example.com',
+            },
+            {
+                type: 'socks5',
+                name: 'Surge SOCKS5 Plain ALPN',
+                server: 'socks-plain-alpn.example.com',
+                port: 1080,
+                alpn: ['http/1.1', 'h2'],
+                'name-cert-verify': 'verify.example.com',
+            },
+        ]);
+
+        expect(output).to.not.include('alpn=');
+        expect(output).to.not.include('server-cert-verify-name=');
+    });
+
     it('produces Surge TUIC v5 lines with port hopping', function () {
         const output = produceExternal('Surge', {
             type: 'tuic',
@@ -449,8 +1033,232 @@ describe('Proxy text producers', function () {
         });
 
         expect(output).to.equal(
-            `Surge TUIC=tuic-v5,tuic.example.com,443,uuid=${UUID},password="secret",alpn=h3,port-hopping="9000;9002-9004",sni="sni.example.com",skip-cert-verify=true,ecn=true`,
+            `Surge TUIC=tuic-v5,tuic.example.com,443,uuid=${UUID},password="secret",port-hopping="9000;9002-9004",sni="sni.example.com",alpn="h3",skip-cert-verify=true,ecn=true`,
         );
+    });
+
+    it('does not emit empty Surge port hopping fields', function () {
+        const output = produceExternal('Surge', [
+            {
+                type: 'tuic',
+                name: 'Surge TUIC Plain',
+                server: 'tuic.example.com',
+                port: 443,
+                uuid: UUID,
+                password: 'secret',
+                ports: '',
+                'hop-interval': '   ',
+                sni: 'sni.example.com',
+                'skip-cert-verify': true,
+                alpn: ['h3'],
+            },
+            {
+                type: 'hysteria2',
+                name: 'Surge Hysteria2 Plain',
+                server: 'hy2.example.com',
+                port: 443,
+                password: 'secret',
+                ports: '',
+                'hop-interval': '   ',
+                sni: 'peer.example.com',
+                'skip-cert-verify': true,
+            },
+        ]);
+
+        expect(output).to.equal(
+            `Surge TUIC Plain=tuic-v5,tuic.example.com,443,uuid=${UUID},password="secret",sni="sni.example.com",alpn="h3",skip-cert-verify=true\nSurge Hysteria2 Plain=hysteria2,hy2.example.com,443,password="secret",sni="peer.example.com",skip-cert-verify=true`,
+        );
+    });
+
+    it('produces Surge Hysteria2 lines with port hopping', function () {
+        const output = produceExternal('Surge', {
+            type: 'hysteria2',
+            name: 'Surge Hysteria2',
+            server: 'hy2.example.com',
+            port: 443,
+            password: 'secret',
+            ports: '8443,8445-8447',
+            'hop-interval': 30,
+            sni: 'peer.example.com',
+            'skip-cert-verify': true,
+            down: '100 Mbps',
+        });
+
+        expect(output).to.equal(
+            'Surge Hysteria2=hysteria2,hy2.example.com,443,password="secret",port-hopping="8443;8445-8447",port-hopping-interval=30,sni="peer.example.com",skip-cert-verify=true,download-bandwidth=100',
+        );
+    });
+
+    it('produces Surge Hysteria2 gecko obfs lines', function () {
+        const output = produceExternal('Surge', {
+            type: 'hysteria2',
+            name: 'Surge Hysteria2 Gecko',
+            server: 'hy2.example.com',
+            port: 443,
+            password: 'secret',
+            obfs: 'gecko',
+            'obfs-password': 'mask',
+        });
+
+        expect(output).to.equal(
+            'Surge Hysteria2 Gecko=hysteria2,hy2.example.com,443,password="secret",gecko-password="mask"',
+        );
+    });
+
+    it('produces Surge Snell v6 and filters v6 obfs', function () {
+        const { result: output, errors } = captureErrors(() =>
+            ProxyUtils.produce(
+                [
+                    {
+                        type: 'snell',
+                        name: 'Surge Snell v6',
+                        server: 'snell.example.com',
+                        port: 443,
+                        psk: 'secret',
+                        version: 6,
+                        mode: 'unsafe-raw',
+                        udp: true,
+                    },
+                    {
+                        type: 'snell',
+                        name: 'Surge Snell v5 Mode',
+                        server: 'snell.example.com',
+                        port: 443,
+                        psk: 'secret',
+                        version: 5,
+                        mode: 'unshaped',
+                        udp: true,
+                    },
+                    {
+                        type: 'snell',
+                        name: 'Surge Snell v6 Obfs',
+                        server: 'snell.example.com',
+                        port: 443,
+                        psk: 'secret',
+                        version: 6,
+                        udp: true,
+                        'obfs-opts': {
+                            mode: 'tls',
+                            host: 'obfs.example.com',
+                            path: '/snell',
+                        },
+                    },
+                ],
+                'Surge',
+                'external',
+            ),
+        );
+
+        expect(output).to.equal(
+            [
+                'Surge Snell v6=snell,snell.example.com,443,version=6,psk="secret",mode=unsafe-raw,udp-relay=true',
+                'Surge Snell v5 Mode=snell,snell.example.com,443,version=5,psk="secret",udp-relay=true',
+            ].join('\n'),
+        );
+        expect(errors).to.deep.equal([
+            'Platform Surge does not support Snell version 6 with obfs',
+        ]);
+    });
+
+    it('prefers plugin-scoped Surge shadow-tls alpn over top-level alpn', function () {
+        const output = produceExternal('Surge', {
+            type: 'snell',
+            name: 'Surge Snell ShadowTLS ALPN',
+            server: 'snell.example.com',
+            port: 443,
+            psk: 'secret',
+            version: 5,
+            plugin: 'shadow-tls',
+            alpn: ['ignored.example'],
+            'plugin-opts': {
+                password: 'shadow-pass',
+                host: 'mask.example.com',
+                version: 3,
+                alpn: ['http/1.1', 'h2'],
+            },
+        });
+
+        expect(output).to.equal(
+            'Surge Snell ShadowTLS ALPN=snell,snell.example.com,443,version=5,psk="secret",shadow-tls-password="shadow-pass",shadow-tls-sni=mask.example.com,shadow-tls-version=3,alpn="http/1.1,h2"',
+        );
+    });
+
+    it('omits Surge TLS-only params for plain HTTP, SOCKS5, and VMess nodes', function () {
+        const cases = [
+            {
+                type: 'http',
+                name: 'Surge HTTP Plain TLS Params',
+                server: 'http.example.com',
+                port: 80,
+                sni: 'sni.example.com',
+                'skip-cert-verify': true,
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+                'client-cert': 'client-cert',
+            },
+            {
+                type: 'socks5',
+                name: 'Surge Socks5 Plain TLS Params',
+                server: 'socks.example.com',
+                port: 1080,
+                sni: 'sni.example.com',
+                'skip-cert-verify': true,
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+                'client-cert': 'client-cert',
+            },
+            {
+                type: 'vmess',
+                name: 'Surge VMess Plain TLS Params',
+                server: 'vmess.example.com',
+                port: 80,
+                uuid: UUID,
+                alterId: 0,
+                sni: 'sni.example.com',
+                'skip-cert-verify': true,
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+                'client-cert': 'client-cert',
+            },
+        ];
+
+        for (const proxy of cases) {
+            const output = produceExternal('Surge', proxy);
+
+            expect(output, proxy.name).to.not.include(',sni=');
+            expect(output, proxy.name).to.not.include(',skip-cert-verify=');
+            expect(output, proxy.name).to.not.include(
+                ',server-cert-fingerprint-sha256=',
+            );
+            expect(output, proxy.name).to.not.include(',client-cert=');
+        }
+    });
+
+    it('quotes Surge SSH private-key and TLS client-cert keystore values', function () {
+        const output = ProxyUtils.produce(
+            [
+                {
+                    type: 'ssh',
+                    name: 'Surge SSH Key',
+                    server: 'ssh.example.com',
+                    port: 22,
+                    username: 'user',
+                    'keystore-private-key': "'ssh-key'",
+                },
+                {
+                    type: 'http',
+                    name: 'Surge HTTPS Client Cert',
+                    server: 'https.example.com',
+                    port: 443,
+                    tls: true,
+                    'keystore-client-cert': "'client-cert'",
+                },
+            ],
+            'Surge',
+            'external',
+        );
+
+        expect(output.split('\n')).to.deep.equal([
+            'Surge SSH Key=ssh,ssh.example.com,22,username="user",private-key="ssh-key"',
+            'Surge HTTPS Client Cert=https,https.example.com,443,client-cert="client-cert"',
+        ]);
     });
 
     it('produces Surge root headers for HTTP, HTTPS, HTTP/2 CONNECT, and TrustTunnel', function () {
@@ -508,10 +1316,103 @@ describe('Proxy text producers', function () {
         );
 
         expect(output.split('\n')).to.deep.equal([
-            'Surge HTTP Headers=http,http.example.com,8080,username="user",password="pass",headers="X-Client:"Surge";X-Token:"abc""',
-            'Surge HTTPS Headers=https,https.example.com,443,headers="X-Padding:"<random-string(16)>"",sni="sni.example.com"',
-            'Surge H2 Headers=h2-connect,h2.example.com,443,headers="X-Padding:"<random-string(16-32)>"",sni="sni.example.com"',
-            'Surge Trust Headers=trust-tunnel,trust.example.com,443,username="user",password="pass",headers="X-Client:"Surge"",sni="sni.example.com"',
+            `Surge HTTP Headers=http,http.example.com,8080,username="user",password="pass",headers="X-Client:"Surge";X-Token:"abc""`,
+            `Surge HTTPS Headers=https,https.example.com,443,headers="X-Padding:"<random-string(16)>"",sni="sni.example.com"`,
+            `Surge H2 Headers=h2-connect,h2.example.com,443,headers="X-Padding:"<random-string(16-32)>"",sni="sni.example.com"`,
+            `Surge Trust Headers=trust-tunnel,trust.example.com,443,username="user",password="pass",headers="X-Client:"Surge"",sni="sni.example.com"`,
+        ]);
+    });
+
+    it('produces Surge max-streams for HTTP/2 CONNECT and TrustTunnel', function () {
+        const output = ProxyUtils.produce(
+            [
+                {
+                    type: 'h2-connect',
+                    name: 'Surge H2 Max Streams',
+                    server: 'h2.example.com',
+                    port: 443,
+                    tls: true,
+                    sni: 'sni.example.com',
+                    headers: {
+                        'X-Padding': '<random-string(16-32)>',
+                    },
+                    'max-streams': 1,
+                },
+                {
+                    type: 'trusttunnel',
+                    name: 'Surge Trust Max Streams',
+                    server: 'trust.example.com',
+                    port: 443,
+                    username: 'user',
+                    password: 'pass',
+                    headers: {
+                        'X-Client': 'Surge',
+                    },
+                    'max-streams': 3,
+                    sni: 'sni.example.com',
+                },
+            ],
+            'Surge',
+            'external',
+        );
+
+        expect(output.split('\n')).to.deep.equal([
+            `Surge H2 Max Streams=h2-connect,h2.example.com,443,headers="X-Padding:"<random-string(16-32)>"",max-streams=1,sni="sni.example.com"`,
+            `Surge Trust Max Streams=trust-tunnel,trust.example.com,443,username="user",password="pass",headers="X-Client:"Surge"",max-streams=3,sni="sni.example.com"`,
+        ]);
+    });
+
+    it('warns when Surge max-streams is greater than 3', function () {
+        const { result: output, warnings } = captureWarns(() =>
+            ProxyUtils.produce(
+                [
+                    {
+                        type: 'h2-connect',
+                        name: 'Surge H2 High Max Streams',
+                        server: 'h2.example.com',
+                        port: 443,
+                        tls: true,
+                        'max-streams': 4,
+                    },
+                    {
+                        type: 'trusttunnel',
+                        name: 'Surge Trust High Max Streams',
+                        server: 'trust.example.com',
+                        port: 443,
+                        tls: true,
+                        'max-streams': 5,
+                    },
+                ],
+                'Surge',
+                'external',
+            ),
+        );
+
+        expect(output.split('\n')).to.deep.equal([
+            'Surge H2 High Max Streams=h2-connect,h2.example.com,443,max-streams=4',
+            'Surge Trust High Max Streams=trust-tunnel,trust.example.com,443,max-streams=5',
+        ]);
+        expect(warnings).to.have.length(2);
+        expect(warnings[0]).to.include('max-streams=4');
+        expect(warnings[0]).to.include('greater than 3');
+        expect(warnings[0]).to.include('performance');
+        expect(warnings[1]).to.include('max-streams=5');
+        expect(warnings[1]).to.include('greater than 3');
+        expect(warnings[1]).to.include('performance');
+    });
+
+    it('round-trips Surge max-streams for HTTP/2 CONNECT and TrustTunnel', function () {
+        const proxies = ProxyUtils.parse(
+            [
+                'Surge H2 Round Trip = h2-connect,h2.example.com,443,headers=X-Padding:<random-string(16-32)>,max-streams=1,sni=sni.example.com',
+                'Surge Trust Round Trip = trust-tunnel,trust.example.com,443,username=user,password=pass,headers=X-Client:Surge,max-streams="3",sni=sni.example.com',
+            ].join('\n'),
+        );
+        const output = ProxyUtils.produce(proxies, 'Surge', 'external');
+
+        expect(output.split('\n')).to.deep.equal([
+            `Surge H2 Round Trip=h2-connect,h2.example.com,443,headers="X-Padding:"<random-string(16-32)>"",max-streams=1,sni="sni.example.com",udp-relay=true`,
+            `Surge Trust Round Trip=trust-tunnel,trust.example.com,443,username="user",password="pass",headers="X-Client:"Surge"",max-streams=3,sni="sni.example.com",udp-relay=true`,
         ]);
     });
 
@@ -547,9 +1448,48 @@ describe('Proxy text producers', function () {
             'X-Quote': 'a",b',
             'X-Backslash': 'c\\d',
         });
-        expect(output).to.include(String.raw`X-Quote:"a\",b"`);
-        expect(output).to.include(String.raw`X-Backslash:"c\\d"`);
+        expect(output).to.include(String.raw`X-Quote:"a",b"`);
+        expect(output).to.include(String.raw`X-Backslash:"c\d"`);
         expect(proxy.sni).to.equal('sni.example.com');
+    });
+
+    it('round-trips Surge websocket headers with pipe separators', function () {
+        const output = ProxyUtils.produce(
+            [
+                {
+                    type: 'vmess',
+                    name: 'Surge WS Headers',
+                    server: 'ws.example.com',
+                    port: 443,
+                    uuid: UUID,
+                    aead: true,
+                    tls: true,
+                    sni: 'sni.example.com',
+                    network: 'ws',
+                    'ws-opts': {
+                        path: '/ws',
+                        headers: {
+                            Host: 'cdn.example.com',
+                            'X-Comma': 'a,b',
+                            'X-Quote': 'a",b',
+                        },
+                    },
+                },
+            ],
+            'Surge',
+            'external',
+        );
+
+        const [proxy] = ProxyUtils.parse(output);
+
+        expect(proxy['ws-opts'].headers).to.deep.equal({
+            Host: 'cdn.example.com',
+            'X-Comma': 'a,b',
+            'X-Quote': 'a",b',
+        });
+        expect(output).to.include(
+            String.raw`ws-headers="Host:"cdn.example.com"|X-Comma:"a,b"|X-Quote:"a",b""`,
+        );
     });
 
     it('filters root proxy headers for unsupported text targets with an error log', function () {
@@ -695,16 +1635,50 @@ describe('Proxy text producers', function () {
         );
     });
 
-    it('omits Surfboard Hysteria2 lines when obfs is present', function () {
+    it('does not emit empty Surfboard Hysteria2 port hopping fields', function () {
+        const output = produceExternal('Surfboard', {
+            type: 'hysteria2',
+            name: 'Surfboard Hysteria2 Plain',
+            server: 'hy2.example.com',
+            port: 443,
+            password: 'secret',
+            ports: '',
+            'hop-interval': '   ',
+            sni: 'peer.example.com',
+            'skip-cert-verify': true,
+        });
+
+        expect(output).to.equal(
+            'Surfboard Hysteria2 Plain=hysteria2,hy2.example.com,443,password="secret",sni="peer.example.com",skip-cert-verify=true',
+        );
+    });
+
+    it('produces Surfboard Hysteria2 salamander obfs lines', function () {
+        const output = produceExternal('Surfboard', {
+            type: 'hysteria2',
+            name: 'Surfboard Hysteria2 Salamander',
+            server: 'hy2.example.com',
+            port: 443,
+            password: 'secret',
+            obfs: 'salamander',
+            'obfs-password': 'mask',
+        });
+
+        expect(output).to.equal(
+            'Surfboard Hysteria2 Salamander=hysteria2,hy2.example.com,443,password="secret",salamander-password="mask"',
+        );
+    });
+
+    it('omits Surfboard Hysteria2 lines when unsupported obfs is present', function () {
         const output = ProxyUtils.produce(
             [
                 {
                     type: 'hysteria2',
-                    name: 'Surfboard Hysteria2 Obfs',
+                    name: 'Surfboard Hysteria2 Gecko',
                     server: 'hy2.example.com',
                     port: 443,
                     password: 'secret',
-                    obfs: 'salamander',
+                    obfs: 'gecko',
                     'obfs-password': 'mask',
                 },
             ],
@@ -713,6 +1687,238 @@ describe('Proxy text producers', function () {
         );
 
         expect(output).to.equal('');
+    });
+
+    it('produces Surfboard TLS server certificate fingerprints', function () {
+        const fingerprint = 'SHA256:FINGERPRINT';
+        const cases = [
+            {
+                name: 'Surfboard HTTPS Fingerprint',
+                proxy: {
+                    type: 'http',
+                    name: 'Surfboard HTTPS Fingerprint',
+                    server: 'https.example.com',
+                    port: 443,
+                    tls: true,
+                    sni: 'https.example.com',
+                    'tls-fingerprint': fingerprint,
+                },
+                prefix: 'Surfboard HTTPS Fingerprint=https',
+            },
+            {
+                name: 'Surfboard Socks5 TLS Fingerprint',
+                proxy: {
+                    type: 'socks5',
+                    name: 'Surfboard Socks5 TLS Fingerprint',
+                    server: 'socks.example.com',
+                    port: 443,
+                    tls: true,
+                    sni: 'socks.example.com',
+                    'tls-fingerprint': fingerprint,
+                },
+                prefix: 'Surfboard Socks5 TLS Fingerprint=socks5-tls',
+            },
+            {
+                name: 'Surfboard Trojan Fingerprint',
+                proxy: {
+                    type: 'trojan',
+                    name: 'Surfboard Trojan Fingerprint',
+                    server: 'trojan.example.com',
+                    port: 443,
+                    password: 'secret',
+                    tls: true,
+                    sni: 'trojan.example.com',
+                    'tls-fingerprint': fingerprint,
+                },
+                prefix: 'Surfboard Trojan Fingerprint=trojan',
+            },
+            {
+                name: 'Surfboard VMess TLS Fingerprint',
+                proxy: {
+                    type: 'vmess',
+                    name: 'Surfboard VMess TLS Fingerprint',
+                    server: 'vmess.example.com',
+                    port: 443,
+                    uuid: UUID,
+                    alterId: 0,
+                    tls: true,
+                    sni: 'vmess.example.com',
+                    'tls-fingerprint': fingerprint,
+                },
+                prefix: 'Surfboard VMess TLS Fingerprint=vmess',
+            },
+            {
+                name: 'Surfboard Hysteria2 Fingerprint',
+                proxy: {
+                    type: 'hysteria2',
+                    name: 'Surfboard Hysteria2 Fingerprint',
+                    server: 'hy2.example.com',
+                    port: 443,
+                    password: 'secret',
+                    sni: 'hy2.example.com',
+                    'tls-fingerprint': fingerprint,
+                },
+                prefix: 'Surfboard Hysteria2 Fingerprint=hysteria2',
+            },
+            {
+                name: 'Surfboard AnyTLS Fingerprint',
+                proxy: {
+                    type: 'anytls',
+                    name: 'Surfboard AnyTLS Fingerprint',
+                    server: 'anytls.example.com',
+                    port: 443,
+                    password: 'secret',
+                    sni: 'anytls.example.com',
+                    'tls-fingerprint': fingerprint,
+                },
+                prefix: 'Surfboard AnyTLS Fingerprint=anytls',
+            },
+        ];
+
+        for (const { name, proxy, prefix } of cases) {
+            const output = produceExternal('Surfboard', proxy);
+
+            expect(output, name).to.include(prefix);
+            expect(output, name).to.include(
+                `,server-cert-fingerprint-sha256=${fingerprint}`,
+            );
+        }
+    });
+
+    it('omits Surfboard TLS-only params for plain HTTP, SOCKS5, and VMess nodes', function () {
+        const cases = [
+            {
+                type: 'http',
+                name: 'Surfboard HTTP Plain TLS Params',
+                server: 'http.example.com',
+                port: 80,
+                sni: 'sni.example.com',
+                'skip-cert-verify': true,
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+            },
+            {
+                type: 'socks5',
+                name: 'Surfboard Socks5 Plain TLS Params',
+                server: 'socks.example.com',
+                port: 1080,
+                sni: 'sni.example.com',
+                'skip-cert-verify': true,
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+            },
+            {
+                type: 'vmess',
+                name: 'Surfboard VMess Plain TLS Params',
+                server: 'vmess.example.com',
+                port: 80,
+                uuid: UUID,
+                alterId: 0,
+                sni: 'sni.example.com',
+                'skip-cert-verify': true,
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+            },
+        ];
+
+        for (const proxy of cases) {
+            const output = produceExternal('Surfboard', proxy);
+
+            expect(output, proxy.name).to.not.include(',sni=');
+            expect(output, proxy.name).to.not.include(',skip-cert-verify=');
+            expect(output, proxy.name).to.not.include(
+                ',server-cert-fingerprint-sha256=',
+            );
+        }
+    });
+
+    it('produces Surfboard Snell versions 1 through 5', function () {
+        for (const version of [1, 2, 3, 4, 5]) {
+            const output = produceExternal('Surfboard', {
+                type: 'snell',
+                name: `Surfboard Snell ${version}`,
+                server: 'snell.example.com',
+                port: 443,
+                psk: 'secret',
+                version,
+            });
+
+            expect(output).to.equal(
+                `Surfboard Snell ${version}=snell,snell.example.com,443,version=${version},psk="secret"`,
+            );
+        }
+    });
+
+    it('appends Surfboard block-quic to supported protocols', function () {
+        const proxies = [
+            {
+                type: 'ss',
+                name: 'Surfboard SS Block QUIC',
+                server: 'ss.example.com',
+                port: 443,
+                cipher: 'aes-128-gcm',
+                password: 'secret',
+            },
+            {
+                type: 'snell',
+                name: 'Surfboard Snell Block QUIC',
+                server: 'snell.example.com',
+                port: 443,
+                psk: 'secret',
+                version: 5,
+            },
+            {
+                type: 'http',
+                name: 'Surfboard HTTP Block QUIC',
+                server: 'http.example.com',
+                port: 80,
+            },
+            {
+                type: 'socks5',
+                name: 'Surfboard Socks5 Block QUIC',
+                server: 'socks.example.com',
+                port: 1080,
+            },
+            {
+                type: 'trojan',
+                name: 'Surfboard Trojan Block QUIC',
+                server: 'trojan.example.com',
+                port: 443,
+                password: 'secret',
+            },
+            {
+                type: 'vmess',
+                name: 'Surfboard VMess Block QUIC',
+                server: 'vmess.example.com',
+                port: 443,
+                uuid: UUID,
+                alterId: 0,
+            },
+            {
+                type: 'hysteria2',
+                name: 'Surfboard Hysteria2 Block QUIC',
+                server: 'hy2.example.com',
+                port: 443,
+                password: 'secret',
+            },
+            {
+                type: 'anytls',
+                name: 'Surfboard AnyTLS Block QUIC',
+                server: 'anytls.example.com',
+                port: 443,
+                password: 'secret',
+            },
+            {
+                type: 'wireguard-surge',
+                name: 'Surfboard WireGuard Block QUIC',
+            },
+        ];
+
+        for (const proxy of proxies) {
+            const output = produceExternal('Surfboard', {
+                ...proxy,
+                'block-quic': 'on',
+            });
+
+            expect(output, proxy.name).to.include(',block-quic=on');
+        }
     });
 
     it('produces SurgeMac external lines', function () {
@@ -1208,7 +2414,7 @@ describe('Proxy text producers', function () {
             tls: true,
             sni: 'sni.example.com',
             udp: true,
-            'packet-addr': true,
+            'packet-encoding': 'packetaddr',
             network: 'ws',
             'ws-opts': {
                 path: '/ws',
@@ -1222,6 +2428,55 @@ describe('Proxy text producers', function () {
 
         expect(output).to.equal(
             `vless://${UUID}@vless.example.com:443?security=tls&type=ws&path=%2Fws&host=cdn.example.com&ed=2048&eh=X-Data&packetEncoding=packet&sni=sni.example.com#URI%20WS%20Early`,
+        );
+    });
+
+    it('produces URI VLESS websocket links with xudp packet encoding', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI WS XUDP',
+            server: 'vless-xudp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            udp: true,
+            'packet-encoding': 'xudp',
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+            },
+        });
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless-xudp.example.com:443?security=tls&type=ws&path=%2Fws&host=cdn.example.com&packetEncoding=xudp#URI%20WS%20XUDP`,
+        );
+    });
+
+    it('prefers legacy xudp over legacy packet addr for URI VLESS links', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI WS Legacy XUDP',
+            server: 'vless-legacy-xudp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            udp: true,
+            xudp: true,
+            'packet-addr': true,
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+            },
+        });
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless-legacy-xudp.example.com:443?security=tls&type=ws&path=%2Fws&host=cdn.example.com&packetEncoding=xudp#URI%20WS%20Legacy%20XUDP`,
         );
     });
 
@@ -1277,6 +2532,27 @@ describe('Proxy text producers', function () {
         );
     });
 
+    it('produces URI VLESS links with vcn from name-cert-verify', function () {
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI WS VCN',
+            server: 'vless.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            'name-cert-verify': 'edited.example.com',
+            _vcn: ['cert.example.com', 'backup.example.com'],
+            network: 'ws',
+            'ws-opts': {
+                path: '/ws',
+            },
+        });
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless.example.com:443?security=tls&type=ws&path=%2Fws&vcn=cert.example.com%2Cbackup.example.com#URI%20WS%20VCN`,
+        );
+    });
+
     it('produces URI VLESS links with ech from mihomo ech opts config', function () {
         const output = produceExternal('URI', {
             type: 'vless',
@@ -1302,6 +2578,24 @@ describe('Proxy text producers', function () {
 
         expect(output).to.equal(
             `vless://${UUID}@vless.example.com:443?security=tls&type=ws&path=%2Fws&host=cdn.example.com&ech=ECHCONFIG&sni=sni.example.com#URI%20WS%20ECH`,
+        );
+    });
+
+    it('produces URI Hysteria2 links with ech from mihomo ech opts config', function () {
+        const output = produceExternal('URI', {
+            type: 'hysteria2',
+            name: 'URI Hysteria2 ECH',
+            server: 'hy2.example.com',
+            port: 443,
+            password: 'secret',
+            'ech-opts': {
+                enable: true,
+                config: 'ECHCONFIG',
+            },
+        });
+
+        expect(output).to.equal(
+            'hysteria2://secret@hy2.example.com:443?ech=ECHCONFIG#URI%20Hysteria2%20ECH',
         );
     });
 
@@ -1429,6 +2723,7 @@ describe('Proxy text producers', function () {
             uuid: UUID,
             network: 'http',
             udp: true,
+            'packet-encoding': '',
             'http-opts': {
                 path: ['/edge'],
                 method: 'GET',
@@ -1712,6 +3007,50 @@ describe('Proxy text producers', function () {
         );
     });
 
+    it('normalizes unsupported URI VMess scy values to auto', function () {
+        const output = produceExternal('URI', {
+            type: 'vmess',
+            name: 'URI VMess Invalid Security',
+            server: 'vmess-invalid.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'aes-128-ctr',
+            alterId: 0,
+            tls: true,
+            network: 'ws',
+        });
+        const payload = JSON.parse(
+            Base64.decode(output.replace(/^vmess:\/\//, '')),
+        );
+
+        expect(payload.scy).to.equal('auto');
+    });
+
+    it('produces URI VMess h2 links from mihomo h2-opts host', function () {
+        const output = produceExternal('URI', {
+            type: 'vmess',
+            name: 'URI VMess H2',
+            server: 'vmess-h2.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'auto',
+            alterId: 0,
+            tls: true,
+            network: 'h2',
+            'h2-opts': {
+                path: '/h2',
+                host: ['h2.example.com'],
+            },
+        });
+        const payload = JSON.parse(
+            Base64.decode(output.replace(/^vmess:\/\//, '')),
+        );
+
+        expect(payload.net).to.equal('h2');
+        expect(payload.path).to.equal('/h2');
+        expect(payload.host).to.equal('h2.example.com');
+    });
+
     it('produces URI VLESS h2 links using share-link http transport type', function () {
         const output = produceExternal('URI', {
             type: 'vless',
@@ -1721,13 +3060,12 @@ describe('Proxy text producers', function () {
             uuid: UUID,
             tls: true,
             udp: true,
+            'packet-encoding': '',
             network: 'h2',
             _h2: true,
             'h2-opts': {
                 path: '/h2',
-                headers: {
-                    host: ['h2.example.com'],
-                },
+                host: ['h2.example.com'],
             },
         });
 
@@ -1740,6 +3078,8 @@ describe('Proxy text producers', function () {
         const extra = JSON.stringify({
             noGRPCHeader: true,
             xPaddingBytes: '64-128',
+            sessionIDTable: 'Base62',
+            sessionIDLength: 16,
         });
         const output = produceExternal('URI', {
             type: 'vless',
@@ -1758,6 +3098,8 @@ describe('Proxy text producers', function () {
                 mode: 'stream-up',
                 'no-grpc-header': true,
                 'x-padding-bytes': '64-128',
+                'session-table': 'Base62',
+                'session-length': 16,
             },
         });
 
@@ -1766,6 +3108,41 @@ describe('Proxy text producers', function () {
                 extra,
             )}#URI%20XHTTP`,
         );
+    });
+
+    it('produces URI VLESS xhttp links with explicit empty session table strings', function () {
+        const extra = JSON.stringify({
+            sessionIDTable: '',
+        });
+        const output = produceExternal('URI', {
+            type: 'vless',
+            name: 'URI XHTTP Empty Session Table',
+            server: 'vless-xhttp.example.com',
+            port: 443,
+            uuid: UUID,
+            tls: true,
+            sni: 'sni.example.com',
+            network: 'xhttp',
+            'xhttp-opts': {
+                path: '/xhttp',
+                headers: {
+                    Host: 'cdn.example.com',
+                },
+                mode: 'stream-up',
+                'session-table': '',
+            },
+        });
+
+        expect(output).to.equal(
+            `vless://${UUID}@vless-xhttp.example.com:443?security=tls&type=xhttp&path=%2Fxhttp&host=cdn.example.com&sni=sni.example.com&mode=stream-up&extra=${encodeURIComponent(
+                extra,
+            )}#URI%20XHTTP%20Empty%20Session%20Table`,
+        );
+
+        const reparsed = ProxyUtils.parse(output);
+        expect(reparsed, output).to.have.length(1);
+        expect(reparsed[0]['xhttp-opts']?.['session-table']).to.equal('');
+        expect(reparsed[0]).to.not.have.property('_extra_unsupported');
     });
 
     it('preserves _extra_unsupported without letting it override structured xhttp fields when producing URI VLESS links', function () {
@@ -1780,11 +3157,15 @@ describe('Proxy text producers', function () {
             network: 'xhttp',
             _extra_unsupported: {
                 customField: 'keep-me',
+                sessionIDTable: 'stale-table',
                 downloadSettings: {
                     sockopt: {
                         mark: 255,
                     },
                     address: 'old.example.com',
+                    xhttpSettings: {
+                        sessionIDLength: '1-2',
+                    },
                 },
             },
             'xhttp-opts': {
@@ -1794,12 +3175,16 @@ describe('Proxy text producers', function () {
                     Host: 'cdn.example.com',
                 },
                 'no-grpc-header': true,
+                'session-table': 'Base62',
+                'session-length': '16-32',
                 'download-settings': {
                     server: 'download.example.com',
                     port: 8443,
                     tls: true,
                     path: '/download',
                     host: 'download-host.example.com',
+                    'session-table': 'abcXYZ012',
+                    'session-length': '8-12',
                 },
             },
         });
@@ -1808,6 +3193,8 @@ describe('Proxy text producers', function () {
         const extra = JSON.parse(decodeURIComponent(encodedExtra));
         expect(extra.customField).to.equal('keep-me');
         expect(extra.noGRPCHeader).to.equal(true);
+        expect(extra.sessionIDTable).to.equal('Base62');
+        expect(extra.sessionIDLength).to.equal('16-32');
         expect(extra.downloadSettings?.address).to.equal(
             'download.example.com',
         );
@@ -1823,12 +3210,28 @@ describe('Proxy text producers', function () {
         expect(extra.downloadSettings?.xhttpSettings?.host).to.equal(
             'download-host.example.com',
         );
+        expect(extra.downloadSettings?.xhttpSettings?.sessionIDTable).to.equal(
+            'abcXYZ012',
+        );
+        expect(extra.downloadSettings?.xhttpSettings?.sessionIDLength).to.equal(
+            '8-12',
+        );
 
         const reparsed = ProxyUtils.parse(output);
         expect(reparsed, output).to.have.length(1);
         expect(
             reparsed[0]['xhttp-opts']?.['download-settings']?.server,
         ).to.equal('download.example.com');
+        expect(reparsed[0]['xhttp-opts']?.['session-table']).to.equal('Base62');
+        expect(reparsed[0]['xhttp-opts']?.['session-length']).to.equal('16-32');
+        expect(
+            reparsed[0]['xhttp-opts']?.['download-settings']?.['session-table'],
+        ).to.equal('abcXYZ012');
+        expect(
+            reparsed[0]['xhttp-opts']?.['download-settings']?.[
+                'session-length'
+            ],
+        ).to.equal('8-12');
         expect(reparsed[0]._extra_unsupported).to.deep.equal({
             customField: 'keep-me',
             downloadSettings: {
@@ -1843,6 +3246,8 @@ describe('Proxy text producers', function () {
         const rawExtra = JSON.stringify({
             customField: 'keep-me',
             scMinPostsIntervalMs: '0-300',
+            sessionIDTable: 'raw-table',
+            sessionIDLength: '8-12',
         });
         const output = produceExternal('URI', {
             type: 'vless',
@@ -1861,6 +3266,8 @@ describe('Proxy text producers', function () {
                     Host: 'cdn.example.com',
                 },
                 'sc-min-posts-interval-ms': 300,
+                'session-table': 'structured-table',
+                'session-length': '16-32',
             },
         });
 
@@ -1872,6 +3279,10 @@ describe('Proxy text producers', function () {
         expect(
             reparsed[0]['xhttp-opts']?.['sc-min-posts-interval-ms'],
         ).to.equal('0-300');
+        expect(reparsed[0]['xhttp-opts']?.['session-table']).to.equal(
+            'raw-table',
+        );
+        expect(reparsed[0]['xhttp-opts']?.['session-length']).to.equal('8-12');
     });
 
     it('stringifies plain-object _extra before using it as the final xhttp URI extra', function () {
@@ -2352,8 +3763,8 @@ describe('Proxy text producers', function () {
             xPaddingPlacement: 'header',
             xPaddingMethod: 'tokenish',
             uplinkHTTPMethod: 'PUT',
-            sessionPlacement: 'query',
-            sessionKey: 'x_session_id',
+            sessionIDPlacement: 'query',
+            sessionIDKey: 'x_session_id',
             seqPlacement: 'header',
             seqKey: 'X-Seq',
             uplinkDataPlacement: 'header',
@@ -2390,8 +3801,8 @@ describe('Proxy text producers', function () {
                     xPaddingPlacement: 'query',
                     xPaddingMethod: 'repeat-x',
                     uplinkHTTPMethod: 'PATCH',
-                    sessionPlacement: 'header',
-                    sessionKey: 'X-Session',
+                    sessionIDPlacement: 'header',
+                    sessionIDKey: 'X-Session',
                     seqPlacement: 'query',
                     seqKey: 'x_seq',
                     uplinkDataPlacement: 'cookie',
@@ -2512,9 +3923,9 @@ describe('Proxy text producers', function () {
         ).to.equal(-1);
     });
 
-    it('normalizes Mihomo leading-zero structured xhttp scalars when producing URI VLESS links', function () {
+    it('normalizes Mihomo leading-zero structured xhttp values when producing URI VLESS links', function () {
         const extra = JSON.stringify({
-            scMaxEachPostBytes: 1000000,
+            scMaxEachPostBytes: '1-1000000',
             scMinPostsIntervalMs: 300,
             downloadSettings: {
                 address: 'download.example.com',
@@ -2525,7 +3936,7 @@ describe('Proxy text producers', function () {
                     path: '/download',
                     host: 'download-host.example.com',
                     mode: 'stream-up',
-                    scMaxEachPostBytes: 1000000,
+                    scMaxEachPostBytes: '1-1000000',
                     scMinPostsIntervalMs: '0-300',
                 },
             },
@@ -2545,7 +3956,7 @@ describe('Proxy text producers', function () {
                 headers: {
                     Host: 'cdn.example.com',
                 },
-                'sc-max-each-post-bytes': '000-1000000',
+                'sc-max-each-post-bytes': '000001-1000000',
                 'sc-min-posts-interval-ms': '0300',
                 'download-settings': {
                     server: 'download.example.com',
@@ -2553,7 +3964,7 @@ describe('Proxy text producers', function () {
                     tls: true,
                     path: '/download',
                     host: 'download-host.example.com',
-                    'sc-max-each-post-bytes': '000-1000000',
+                    'sc-max-each-post-bytes': '000001-1000000',
                     'sc-min-posts-interval-ms': '000-300',
                 },
             },
@@ -2568,7 +3979,7 @@ describe('Proxy text producers', function () {
         const reparsed = ProxyUtils.parse(output);
         expect(reparsed, output).to.have.length(1);
         expect(reparsed[0]['xhttp-opts']?.['sc-max-each-post-bytes']).to.equal(
-            1000000,
+            '1-1000000',
         );
         expect(
             reparsed[0]['xhttp-opts']?.['sc-min-posts-interval-ms'],
@@ -2577,7 +3988,7 @@ describe('Proxy text producers', function () {
             reparsed[0]['xhttp-opts']?.['download-settings']?.[
                 'sc-max-each-post-bytes'
             ],
-        ).to.equal(1000000);
+        ).to.equal('1-1000000');
         expect(
             reparsed[0]['xhttp-opts']?.['download-settings']?.[
                 'sc-min-posts-interval-ms'
@@ -2585,9 +3996,9 @@ describe('Proxy text producers', function () {
         ).to.equal('0-300');
     });
 
-    it('normalizes Mihomo explicit-plus structured xhttp scalars when producing URI VLESS links', function () {
+    it('normalizes Mihomo explicit-plus structured xhttp values when producing URI VLESS links', function () {
         const extra = JSON.stringify({
-            scMaxEachPostBytes: 1000000,
+            scMaxEachPostBytes: '500000-1000000',
             scMinPostsIntervalMs: 300,
             downloadSettings: {
                 address: 'download.example.com',
@@ -2598,7 +4009,7 @@ describe('Proxy text producers', function () {
                     path: '/download',
                     host: 'download-host.example.com',
                     mode: 'stream-up',
-                    scMaxEachPostBytes: 1000000,
+                    scMaxEachPostBytes: '1-1000000',
                     scMinPostsIntervalMs: '0-300',
                 },
             },
@@ -2626,7 +4037,7 @@ describe('Proxy text producers', function () {
                     tls: true,
                     path: '/download',
                     host: 'download-host.example.com',
-                    'sc-max-each-post-bytes': '+0-+1000000',
+                    'sc-max-each-post-bytes': '+1-+1000000',
                     'sc-min-posts-interval-ms': '+0-+300',
                 },
             },
@@ -2641,7 +4052,7 @@ describe('Proxy text producers', function () {
         const reparsed = ProxyUtils.parse(output);
         expect(reparsed, output).to.have.length(1);
         expect(reparsed[0]['xhttp-opts']?.['sc-max-each-post-bytes']).to.equal(
-            1000000,
+            '500000-1000000',
         );
         expect(
             reparsed[0]['xhttp-opts']?.['sc-min-posts-interval-ms'],
@@ -2650,7 +4061,7 @@ describe('Proxy text producers', function () {
             reparsed[0]['xhttp-opts']?.['download-settings']?.[
                 'sc-max-each-post-bytes'
             ],
-        ).to.equal(1000000);
+        ).to.equal('1-1000000');
         expect(
             reparsed[0]['xhttp-opts']?.['download-settings']?.[
                 'sc-min-posts-interval-ms'
@@ -3260,11 +4671,87 @@ describe('Proxy text producers', function () {
         });
     });
 
+    it('preserves empty xhttp header values when round-tripping URI VLESS links', function () {
+        const extra = JSON.stringify({
+            headers: {
+                'X-Empty': '',
+                'X-Value': '1',
+            },
+            noGRPCHeader: false,
+            xPaddingObfsMode: false,
+            downloadSettings: {
+                network: 'xhttp',
+                xhttpSettings: {
+                    path: '/download',
+                    headers: {
+                        'X-Download-Empty': '',
+                        'X-Download': '1',
+                    },
+                    noGRPCHeader: false,
+                    xPaddingObfsMode: false,
+                },
+            },
+        });
+        const input = `vless://${UUID}@vless-xhttp.example.com:443?security=tls&type=xhttp&path=%2Fxhttp&extra=${encodeURIComponent(
+            extra,
+        )}#URI%20XHTTP%20Empty%20Headers`;
+
+        const parsed = ProxyUtils.parse(input);
+        expect(parsed, input).to.have.length(1);
+        expect(parsed[0]['xhttp-opts']?.headers).to.deep.equal({
+            'X-Empty': '',
+            'X-Value': '1',
+        });
+        expect(
+            parsed[0]['xhttp-opts']?.['download-settings']?.headers,
+        ).to.deep.equal({
+            'X-Download-Empty': '',
+            'X-Download': '1',
+        });
+
+        const output = produceExternal('URI', parsed[0]);
+        const [, encodedExtra] = output.match(/[?&]extra=([^#]+)/);
+        const reparsedExtra = JSON.parse(decodeURIComponent(encodedExtra));
+        expect(reparsedExtra.headers).to.deep.equal({
+            'X-Empty': '',
+            'X-Value': '1',
+        });
+        expect(reparsedExtra.noGRPCHeader).to.equal(false);
+        expect(reparsedExtra.xPaddingObfsMode).to.equal(false);
+        expect(
+            reparsedExtra.downloadSettings?.xhttpSettings?.headers,
+        ).to.deep.equal({
+            'X-Download-Empty': '',
+            'X-Download': '1',
+        });
+        expect(
+            reparsedExtra.downloadSettings?.xhttpSettings?.noGRPCHeader,
+        ).to.equal(false);
+        expect(
+            reparsedExtra.downloadSettings?.xhttpSettings?.xPaddingObfsMode,
+        ).to.equal(false);
+
+        const reparsed = ProxyUtils.parse(output);
+        expect(reparsed, output).to.have.length(1);
+        expect(reparsed[0]['xhttp-opts']?.headers).to.deep.equal({
+            'X-Empty': '',
+            'X-Value': '1',
+        });
+        expect(
+            reparsed[0]['xhttp-opts']?.['download-settings']?.headers,
+        ).to.deep.equal({
+            'X-Download-Empty': '',
+            'X-Download': '1',
+        });
+    });
+
     it('normalizes structured xhttp range-form scalars when producing URI VLESS links', function () {
         const extra = JSON.stringify({
             noGRPCHeader: true,
             xPaddingBytes: '64-128',
-            scMaxEachPostBytes: 1000000,
+            sessionIDTable: 'Base62',
+            sessionIDLength: '16-32',
+            scMaxEachPostBytes: '1-1000000',
             scMinPostsIntervalMs: '0-300',
             xmux: {
                 maxConnections: '8',
@@ -3278,7 +4765,9 @@ describe('Proxy text producers', function () {
                     path: '/download',
                     host: 'download-host.example.com',
                     mode: 'stream-up',
-                    scMaxEachPostBytes: 1000000,
+                    sessionIDTable: 'abcXYZ012',
+                    sessionIDLength: '8-12',
+                    scMaxEachPostBytes: '500000-1000000',
                     scMinPostsIntervalMs: '0-300',
                     extra: {
                         xmux: {
@@ -3305,7 +4794,9 @@ describe('Proxy text producers', function () {
                 },
                 'no-grpc-header': true,
                 'x-padding-bytes': '64-128',
-                'sc-max-each-post-bytes': '0-1000000',
+                'session-table': 'Base62',
+                'session-length': '16-32',
+                'sc-max-each-post-bytes': '1-1000000',
                 'sc-min-posts-interval-ms': '0-300',
                 'reuse-settings': {
                     'max-connections': '8',
@@ -3316,6 +4807,8 @@ describe('Proxy text producers', function () {
                     tls: true,
                     path: '/download',
                     host: 'download-host.example.com',
+                    'session-table': 'abcXYZ012',
+                    'session-length': '8-12',
                     'sc-max-each-post-bytes': '500000 - 1000000',
                     'sc-min-posts-interval-ms': '0 - 300',
                     'reuse-settings': {
@@ -3334,21 +4827,31 @@ describe('Proxy text producers', function () {
         const reparsed = ProxyUtils.parse(output);
         expect(reparsed, output).to.have.length(1);
         expect(reparsed[0]['xhttp-opts']?.['sc-max-each-post-bytes']).to.equal(
-            1000000,
+            '1-1000000',
         );
         expect(
             reparsed[0]['xhttp-opts']?.['sc-min-posts-interval-ms'],
         ).to.equal('0-300');
+        expect(reparsed[0]['xhttp-opts']?.['session-table']).to.equal('Base62');
+        expect(reparsed[0]['xhttp-opts']?.['session-length']).to.equal('16-32');
         expect(
             reparsed[0]['xhttp-opts']?.['download-settings']?.[
                 'sc-max-each-post-bytes'
             ],
-        ).to.equal(1000000);
+        ).to.equal('500000-1000000');
         expect(
             reparsed[0]['xhttp-opts']?.['download-settings']?.[
                 'sc-min-posts-interval-ms'
             ],
         ).to.equal('0-300');
+        expect(
+            reparsed[0]['xhttp-opts']?.['download-settings']?.['session-table'],
+        ).to.equal('abcXYZ012');
+        expect(
+            reparsed[0]['xhttp-opts']?.['download-settings']?.[
+                'session-length'
+            ],
+        ).to.equal('8-12');
     });
 
     it('does not truncate malformed nested download port strings when producing URI VLESS links', function () {
@@ -3450,6 +4953,7 @@ describe('Proxy text producers', function () {
                 'x-padding-bytes': '64-128',
                 'sc-max-each-post-bytes': '9007199254740993',
                 'sc-min-posts-interval-ms': 0,
+                'session-length': '0-32',
                 'uplink-chunk-size': '64-fast',
                 'reuse-settings': {
                     'max-connections': '8',
@@ -3464,6 +4968,7 @@ describe('Proxy text producers', function () {
                     'x-padding-bytes': '32-64',
                     'sc-max-each-post-bytes': '1-9007199254740993',
                     'sc-min-posts-interval-ms': 'fast',
+                    'session-length': 0,
                     'uplink-chunk-size': 'fast',
                     'reuse-settings': {
                         'max-concurrency': '16-32',
@@ -3489,6 +4994,9 @@ describe('Proxy text producers', function () {
         expect(reparsed[0]['xhttp-opts']).to.not.have.property(
             'uplink-chunk-size',
         );
+        expect(reparsed[0]['xhttp-opts']).to.not.have.property(
+            'session-length',
+        );
         expect(
             reparsed[0]['xhttp-opts']?.['download-settings'],
         ).to.not.have.property('sc-max-each-post-bytes');
@@ -3498,6 +5006,9 @@ describe('Proxy text producers', function () {
         expect(
             reparsed[0]['xhttp-opts']?.['download-settings'],
         ).to.not.have.property('uplink-chunk-size');
+        expect(
+            reparsed[0]['xhttp-opts']?.['download-settings'],
+        ).to.not.have.property('session-length');
     });
 
     it('omits top-level URI xhttp extra when only invalid structured scalars remain', function () {
@@ -3518,6 +5029,8 @@ describe('Proxy text producers', function () {
                 },
                 'sc-max-each-post-bytes': '9007199254740993',
                 'sc-min-posts-interval-ms': 0,
+                'session-table': 123,
+                'session-length': '0-32',
                 'uplink-chunk-size': 'fast',
             },
         });
@@ -3563,6 +5076,8 @@ describe('Proxy text producers', function () {
                     tls: true,
                     'sc-max-each-post-bytes': '1-9007199254740993',
                     'sc-min-posts-interval-ms': 'fast',
+                    'session-table': false,
+                    'session-length': 0,
                     'uplink-chunk-size': 'fast',
                 },
             },
@@ -3611,6 +5126,24 @@ describe('Proxy text producers', function () {
 
         expect(output).to.equal(
             'trojan://secret@trojan.example.com:443?sni=sni.example.com&type=ws&path=%2Fws&host=cdn.example.com&pcs=fingerprint#URI%20Trojan%20PCS',
+        );
+    });
+
+    it('produces URI Trojan links with vcn from the sidecar', function () {
+        const output = produceExternal('URI', {
+            type: 'trojan',
+            name: 'URI Trojan VCN',
+            server: 'trojan.example.com',
+            port: 443,
+            password: 'secret',
+            tls: true,
+            sni: 'sni.example.com',
+            'name-cert-verify': 'edited.example.com',
+            _vcn: ['cert.example.com', 'backup.example.com'],
+        });
+
+        expect(output).to.equal(
+            'trojan://secret@trojan.example.com:443?sni=sni.example.com&vcn=cert.example.com%2Cbackup.example.com#URI%20Trojan%20VCN',
         );
     });
 

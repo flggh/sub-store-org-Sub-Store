@@ -58,6 +58,24 @@ function parseSocks5Uri(uri) {
         password: passwordValue,
     };
 }
+
+function normalizeNodeRequestHeaders(headers) {
+    const normalized = { ...(headers || {}) };
+    let hasAccept = false;
+
+    for (const key of Object.keys(normalized)) {
+        if (key.toLowerCase() !== 'accept') continue;
+        hasAccept = true;
+        if (normalized[key] == null) delete normalized[key];
+    }
+
+    if (!hasAccept) {
+        normalized.Accept = '*/*';
+    }
+
+    return normalized;
+}
+
 export class OpenAPI {
     constructor(name = 'untitled', debug = false) {
         this.name = name;
@@ -500,6 +518,7 @@ export function HTTP(defaultOptions = { baseURL: '' }) {
                         request,
                         interceptors,
                     } = undici;
+                    const allowH2 = opts.allowH2 !== false;
                     const agentOpts = {
                         connect: {
                             rejectUnauthorized:
@@ -508,14 +527,17 @@ export function HTTP(defaultOptions = { baseURL: '' }) {
                                 opts.rejectUnauthorized === false
                                     ? false
                                     : true,
+                            allowH2,
                         },
                         bodyTimeout: opts.timeout,
                         headersTimeout: opts.timeout,
                         maxHeaderSize,
+                        allowH2,
                     };
                     const tlsOptions = {
                         rejectUnauthorized:
                             agentOpts.connect.rejectUnauthorized,
+                        allowH2,
                     };
                     opts.tls = {
                         ...(opts.tls || {}),
@@ -533,6 +555,9 @@ export function HTTP(defaultOptions = { baseURL: '' }) {
                                 ).toString('base64')}`,
                             };
                         }
+                        opts.headers = normalizeNodeRequestHeaders(
+                            opts.headers,
+                        );
                         let dispatcher;
                         if (!opts.proxy) {
                             const allProxy =
@@ -665,7 +690,9 @@ export function HTTP(defaultOptions = { baseURL: '' }) {
         ).then((resp) => events.onResponse(resp));
     }
 
-    const http = {};
+    const http = {
+        request: (options) => send(options.method || 'GET', options),
+    };
     methods.forEach(
         (method) =>
             (http[method.toLowerCase()] = (options) => send(method, options)),

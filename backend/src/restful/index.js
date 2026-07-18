@@ -4,9 +4,14 @@ import express from '@/vendor/express';
 import $ from '@/core/app';
 import migrate from '@/utils/migration';
 import download, { downloadFile } from '@/utils/download';
-import { syncArtifacts, produceArtifact } from '@/restful/sync';
+import {
+    syncArtifacts,
+    produceArtifact,
+    syncArtifactItem,
+} from '@/restful/sync';
 import { gistBackupAction } from '@/restful/miscs';
-import { TOKENS_KEY, SETTINGS_KEY } from '@/constants';
+import { SETTINGS_KEY } from '@/constants';
+import { startArtifactCronJobs } from '@/utils/artifact-cron';
 
 import registerSubscriptionRoutes from './subscriptions';
 import registerCollectionRoutes from './collections';
@@ -24,6 +29,9 @@ import registerMiscRoutes from './miscs';
 import registerNodeInfoRoutes from './node-info';
 import registerParserRoutes from './parser';
 import registerLogRoutes from './logs';
+import registerAgeRoutes from './age';
+import { consumeShareToken } from './token';
+import { AGE_PUBLIC_KEY } from '@/utils/age';
 
 export default function serve() {
     let port;
@@ -76,17 +84,12 @@ export default function serve() {
                         res.status(405).send('Method not allowed');
                         return;
                     }
-                    const tokens = $.read(TOKENS_KEY) || [];
-                    const token = tokens.find(
-                        (t) =>
-                            t.token === req.query.token &&
-                            (`/share/${t.type}/${t.name}` === pathname ||
-                                pathname.startsWith(
-                                    `/share/${t.type}/${t.name}/`,
-                                )) &&
-                            (t.exp == null || t.exp > Date.now()),
-                    );
+                    const token = consumeShareToken({
+                        token: req.query.token,
+                        pathname,
+                    });
                     if (token) {
+                        req.subStoreShareToken = token;
                         next();
                         return;
                     } else {
@@ -148,10 +151,13 @@ export default function serve() {
     registerMiscRoutes($app);
     registerParserRoutes($app);
     registerLogRoutes($app);
+    registerAgeRoutes($app);
 
     $app.start();
 
     if ($.env.isNode) {
+        startArtifactCronJobs(syncArtifactItem);
+
         // Deprecated: SUB_STORE_BACKEND_CRON, SUB_STORE_CRON
         const backend_sync_cron = eval(
             'process.env.SUB_STORE_BACKEND_SYNC_CRON',
@@ -165,7 +171,7 @@ export default function serve() {
                 async function () {
                     try {
                         $.info(`[SYNC CRON] ${backend_sync_cron} started`);
-                        await syncArtifacts();
+                        await syncArtifacts({ skipCronArtifacts: true });
                         $.info(`[SYNC CRON] ${backend_sync_cron} finished`);
                     } catch (e) {
                         $.error(
@@ -401,14 +407,11 @@ export default function serve() {
                         pathRewrite: async (path, req) => {
                             if (req.method.toLowerCase() !== 'get')
                                 throw new Error('Method not allowed');
-                            const tokens = $.read(TOKENS_KEY) || [];
-                            const token = tokens.find(
-                                (t) =>
-                                    t.token === req.query.token &&
-                                    t.type === req.params.type &&
-                                    t.name === req.params.name &&
-                                    (t.exp == null || t.exp > Date.now()),
-                            );
+                            const token = consumeShareToken({
+                                token: req.query.token,
+                                type: req.params.type,
+                                name: req.params.name,
+                            });
                             if (!token) {
                                 const settings = $.read(SETTINGS_KEY) || {};
                                 if (
@@ -424,6 +427,11 @@ export default function serve() {
                                 } else {
                                     return '/404';
                                 }
+                            }
+                            if (token?.[AGE_PUBLIC_KEY]) {
+                                req.headers[
+                                    'x-sub-store-share-age-public-key'
+                                ] = token[AGE_PUBLIC_KEY];
                             }
                             return req.originalUrl;
                         },

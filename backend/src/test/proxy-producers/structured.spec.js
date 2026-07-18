@@ -94,6 +94,160 @@ describe('Proxy structured producers', function () {
         });
     });
 
+    it('normalizes Loon tls-profile before emitting Mihomo client fingerprints', function () {
+        const [proxy] = ProxyUtils.parse(
+            `Loon IOS26=vmess,loon-ios26.example.com,443,auto,"${UUID}",over-tls=true,tls-profile=ios26,alterId=0`,
+        );
+        const output = loadProducedYaml('Mihomo', proxy);
+
+        expect(proxy._loon_tls_profile).to.equal('ios26');
+        expect(proxy['client-fingerprint']).to.equal('ios');
+        expect(output.proxies[0]['client-fingerprint']).to.equal('ios');
+        expect(output.proxies[0]['client-fingerprint']).to.not.equal('ios26');
+        expect(output.proxies[0]).to.not.have.property('_loon_tls_profile');
+    });
+
+    it('defaults omitted UDP to true while preserving explicit disablement', function () {
+        const [enabled, disabled] = ProxyUtils.parse(
+            'Surge AnyTLS=anytls,anytls.example.com,443,password=secret\nanytls=anytls.example.com:443,password=secret,udp-relay=false,tag=QX AnyTLS No UDP',
+        );
+
+        expect(enabled.udp).to.equal(true);
+        const output = loadProducedYaml('Mihomo', [enabled, disabled]).proxies;
+        expect(
+            output.find((proxy) => proxy.name === enabled.name).udp,
+        ).to.equal(true);
+        expect(
+            output.find((proxy) => proxy.name === disabled.name).udp,
+        ).to.equal(false);
+    });
+
+    it('normalizes VMess security values for documented target platforms', function () {
+        const invalidSecurityProxy = {
+            type: 'vmess',
+            name: 'VMess Invalid Security',
+            server: 'vmess-invalid.example.com',
+            port: 443,
+            uuid: UUID,
+            cipher: 'aes-128-ctr',
+            alterId: 0,
+        };
+        const chachaProxy = {
+            ...invalidSecurityProxy,
+            name: 'VMess Chacha Security',
+            cipher: 'chacha20-poly1305',
+        };
+        const legacyChachaAliasProxy = {
+            ...invalidSecurityProxy,
+            name: 'VMess Chacha Alias Security',
+            cipher: 'chacha20-ietf-poly1305',
+        };
+        const noneSecurityProxy = {
+            ...invalidSecurityProxy,
+            name: 'VMess None Security',
+            cipher: 'none',
+        };
+        const zeroSecurityProxy = {
+            ...invalidSecurityProxy,
+            name: 'VMess Zero Security',
+            cipher: 'zero',
+        };
+        const getEgernVmess = (items, name) =>
+            items.find((item) => item.vmess?.name === name)?.vmess;
+
+        expectSubset(
+            getEgernVmess(
+                produceInternal('Egern', invalidSecurityProxy),
+                'VMess Invalid Security',
+            ),
+            {
+                security: 'auto',
+            },
+        );
+        expectSubset(
+            getEgernVmess(
+                loadProducedYaml('Egern', invalidSecurityProxy).proxies,
+                'VMess Invalid Security',
+            ),
+            {
+                security: 'auto',
+            },
+        );
+
+        expect(produceExternal('Loon', invalidSecurityProxy)).to.include(
+            ',auto,"',
+        );
+        expect(produceExternal('Loon', chachaProxy)).to.include(
+            ',chacha20-ietf-poly1305,"',
+        );
+
+        expect(produceExternal('Surge', invalidSecurityProxy)).to.not.include(
+            'encrypt-method=',
+        );
+        expect(produceExternal('Surge', chachaProxy)).to.include(
+            ',encrypt-method=chacha20-ietf-poly1305',
+        );
+
+        expect(produceExternal('QX', invalidSecurityProxy)).to.include(
+            'method=chacha20-poly1305',
+        );
+        expect(produceExternal('QX', legacyChachaAliasProxy)).to.include(
+            'method=chacha20-poly1305',
+        );
+        expect(produceExternal('QX', noneSecurityProxy)).to.include(
+            'method=none',
+        );
+
+        for (const platform of ['Clash', 'Stash']) {
+            expect(
+                loadProducedYaml(platform, invalidSecurityProxy).proxies[0]
+                    .cipher,
+            ).to.equal('auto');
+            expect(
+                loadProducedYaml(platform, legacyChachaAliasProxy).proxies[0]
+                    .cipher,
+            ).to.equal('chacha20-poly1305');
+            expect(
+                loadProducedYaml(platform, noneSecurityProxy).proxies[0].cipher,
+            ).to.equal('none');
+            expect(
+                loadProducedYaml(platform, zeroSecurityProxy).proxies[0].cipher,
+            ).to.equal('auto');
+        }
+
+        expect(
+            loadProducedYaml('Mihomo', invalidSecurityProxy).proxies[0].cipher,
+        ).to.equal('auto');
+        expect(
+            loadProducedYaml('Mihomo', legacyChachaAliasProxy).proxies[0]
+                .cipher,
+        ).to.equal('chacha20-poly1305');
+        expect(
+            loadProducedYaml('Mihomo', zeroSecurityProxy).proxies[0].cipher,
+        ).to.equal('zero');
+        expect(
+            loadProducedYaml('Shadowrocket', invalidSecurityProxy).proxies[0]
+                .cipher,
+        ).to.equal('auto');
+        expect(
+            loadProducedYaml('Shadowrocket', legacyChachaAliasProxy).proxies[0]
+                .cipher,
+        ).to.equal('chacha20-poly1305');
+        expect(
+            loadProducedYaml('Shadowrocket', zeroSecurityProxy).proxies[0]
+                .cipher,
+        ).to.equal('zero');
+
+        expect(
+            loadProducedJson('sing-box', invalidSecurityProxy).outbounds[0]
+                .security,
+        ).to.equal('auto');
+        expect(
+            loadProducedJson('sing-box', legacyChachaAliasProxy).outbounds[0]
+                .security,
+        ).to.equal('chacha20-poly1305');
+    });
+
     it('keeps unsupported Clash proxies when include-unsupported-proxy is enabled', function () {
         const internal = produceInternal(
             'Clash',
@@ -159,6 +313,623 @@ describe('Proxy structured producers', function () {
                 platform,
             ).to.deep.equal(['WS', 'QUIC']);
         }
+    });
+
+    it('keeps Mihomo Snell versions 1 through 5', function () {
+        const proxies = [1, 2, 3, 4, 5, 6].map((version) => ({
+            type: 'snell',
+            name: `Snell ${version}`,
+            server: 'snell.example.com',
+            port: 44046,
+            psk: 'secret',
+            version,
+            udp: true,
+        }));
+
+        const internal = produceInternal('Mihomo', proxies);
+        const external = loadProducedYaml('Mihomo', proxies);
+
+        expect(internal.map((proxy) => proxy.version)).to.deep.equal([
+            1, 2, 3, 4, 5,
+        ]);
+        expect(external.proxies.map((proxy) => proxy.version)).to.deep.equal([
+            1, 2, 3, 4, 5,
+        ]);
+        expect(
+            internal.find((proxy) => proxy.version === 1),
+        ).to.not.have.property('udp');
+        expect(
+            internal.find((proxy) => proxy.version === 2),
+        ).to.not.have.property('udp');
+        expect(internal.find((proxy) => proxy.version === 4).udp).to.equal(
+            true,
+        );
+        expect(internal.find((proxy) => proxy.version === 5).udp).to.equal(
+            true,
+        );
+    });
+
+    it('keeps supported Snell in sing-box by default', function () {
+        const proxy = {
+            type: 'snell',
+            name: 'sing-box Snell',
+            server: 'snell.example.com',
+            port: 44046,
+            psk: 'secret',
+            version: 5,
+            _userkey: 'user-secret',
+            udp: false,
+            tfo: true,
+            'fast-open': true,
+            reuse: true,
+            'dialer-proxy': 'proxy-out',
+            'ip-version': 'v4-only',
+            _dns_server: 'dns-out',
+            _domain_resolver: {
+                client_subnet: '1.2.3.0/24',
+            },
+            'obfs-opts': {
+                mode: 'tls',
+                host: 'obfs.example.com',
+                path: '/ignored-by-sing-box',
+            },
+        };
+
+        const { result: internal, errors } = captureErrors(() =>
+            produceInternal('sing-box', proxy),
+        );
+        const external = loadProducedJson('sing-box', proxy);
+
+        expect(errors).to.deep.equal([]);
+        expect(internal).to.have.length(1);
+        expectSubset(internal[0], {
+            tag: 'sing-box Snell',
+            type: 'snell',
+            server: 'snell.example.com',
+            server_port: 44046,
+            psk: 'secret',
+            version: 4,
+            userkey: 'user-secret',
+            reuse: true,
+            network: 'tcp',
+            obfs_mode: 'tls',
+            obfs_host: 'obfs.example.com',
+            tcp_fast_open: true,
+            udp_fragment: true,
+            detour: 'proxy-out',
+            domain_resolver: {
+                server: 'dns-out',
+                strategy: 'ipv4_only',
+                client_subnet: '1.2.3.0/24',
+            },
+        });
+        expect(internal[0]).to.not.have.property('obfs_uri');
+        expectSubset(external.outbounds[0], internal[0]);
+    });
+
+    it('keeps sing-box supported Snell versions by default and maps v5 to v4', function () {
+        const proxies = [1, 4, 5, 6, '4x'].map((version) => ({
+            type: 'snell',
+            name: `sing-box Snell ${version}`,
+            server: 'snell.example.com',
+            port: 44046,
+            psk: 'secret',
+            version,
+            mode: 'unshaped',
+            udp: true,
+            reuse: true,
+            'obfs-opts': {
+                mode: 'http',
+                host: 'obfs.example.com',
+            },
+        }));
+
+        const { result, errors } = captureErrors(() =>
+            produceInternal('sing-box', proxies),
+        );
+
+        expect(result.map((proxy) => proxy.version)).to.deep.equal([4, 4, 6]);
+        expect(result[1].tag).to.equal('sing-box Snell 5');
+        expect(result[2].mode).to.equal('unshaped');
+        expect(result[2]).to.not.have.property('obfs_mode');
+        expect(errors).to.have.length(2);
+        expect(errors[0]).to.include(
+            'Platform sing-box does not support snell version 1',
+        );
+        expect(errors[1]).to.include(
+            'Platform sing-box does not support snell version 4x',
+        );
+    });
+
+    it('keeps legacy Snell versions when include-unsupported-proxy is enabled', function () {
+        const proxies = [1, 2, 3, 4, 5, 6, '4x'].map((version) => ({
+            type: 'snell',
+            name: `sing-box Snell ${version}`,
+            server: 'snell.example.com',
+            port: 44046,
+            psk: 'secret',
+            version,
+            _userkey: `user-${version}`,
+            udp: true,
+            reuse: true,
+        }));
+
+        const { result, errors } = captureErrors(() =>
+            produceInternal('sing-box', proxies, {
+                'include-unsupported-proxy': true,
+            }),
+        );
+
+        expect(result.map((proxy) => proxy.version)).to.deep.equal([
+            1, 2, 3, 4, 5, 6,
+        ]);
+        expect(
+            result.find((proxy) => proxy.version === 1),
+        ).to.not.have.property('network');
+        expect(
+            result.find((proxy) => proxy.version === 3),
+        ).to.not.have.property('reuse');
+        expect(result.find((proxy) => proxy.version === 4).reuse).to.equal(
+            true,
+        );
+        expect(result.find((proxy) => proxy.version === 5).userkey).to.equal(
+            'user-5',
+        );
+        expect(errors).to.have.length(1);
+        expect(errors[0]).to.include(
+            'Platform sing-box does not support snell version 4x',
+        );
+    });
+
+    it('exports parsed Surge Snell lines to sing-box Snell outbounds', function () {
+        const [proxy] = ProxyUtils.parse(
+            'Surge Snell = snell,surge-snell.example.com,443,psk=secret,version=5,obfs=http,obfs-host=obfs.example.com,obfs-uri=/snell,reuse=true,tfo=true,udp-relay=false,underlying-proxy=proxy-out',
+        );
+
+        const output = loadProducedJson('sing-box', proxy, {
+            'include-unsupported-proxy': true,
+        });
+
+        expectSubset(output.outbounds[0], {
+            tag: 'Surge Snell',
+            type: 'snell',
+            server: 'surge-snell.example.com',
+            server_port: 443,
+            psk: 'secret',
+            version: 5,
+            reuse: true,
+            network: 'tcp',
+            obfs_mode: 'http',
+            obfs_host: 'obfs.example.com',
+            tcp_fast_open: true,
+            detour: 'proxy-out',
+        });
+        expect(output.outbounds[0]).to.not.have.property('obfs_uri');
+    });
+
+    it('exports Snell shadow-tls plugin form to sing-box chained outbounds', function () {
+        const output = loadProducedJson(
+            'sing-box',
+            {
+                type: 'snell',
+                name: 'sing-box Snell ShadowTLS',
+                server: 'snell.example.com',
+                port: 44046,
+                psk: 'secret',
+                version: 4,
+                udp: false,
+                tfo: true,
+                'fast-open': true,
+                reuse: true,
+                'dialer-proxy': 'proxy-out',
+                'ip-version': 'v6-only',
+                _dns_server: 'dns-out',
+                plugin: 'shadow-tls',
+                'plugin-opts': {
+                    host: 'mask.example.com',
+                    password: 'shadow-pass',
+                    version: 3,
+                },
+                'obfs-opts': {
+                    mode: 'http',
+                    host: 'obfs.example.com',
+                },
+            },
+            { 'include-unsupported-proxy': true },
+        );
+
+        expect(output.outbounds).to.have.length(2);
+        expectSubset(output.outbounds[0], {
+            tag: 'sing-box Snell ShadowTLS',
+            type: 'snell',
+            psk: 'secret',
+            version: 4,
+            reuse: true,
+            network: 'tcp',
+            obfs_mode: 'http',
+            obfs_host: 'obfs.example.com',
+            detour: 'sing-box Snell ShadowTLS_shadowtls',
+        });
+        expect(output.outbounds[0]).to.not.have.property('server');
+        expect(output.outbounds[0]).to.not.have.property('server_port');
+        expect(output.outbounds[0]).to.not.have.property('tcp_fast_open');
+        expectSubset(output.outbounds[1], {
+            tag: 'sing-box Snell ShadowTLS_shadowtls',
+            type: 'shadowtls',
+            server: 'snell.example.com',
+            server_port: 44046,
+            version: 3,
+            password: 'shadow-pass',
+            udp_fragment: true,
+            tcp_fast_open: true,
+            detour: 'proxy-out',
+            tls: {
+                enabled: true,
+                server_name: 'mask.example.com',
+            },
+            domain_resolver: {
+                server: 'dns-out',
+                strategy: 'ipv6_only',
+            },
+        });
+        expect(output.outbounds[1].tls).to.not.have.property('utls');
+    });
+
+    it('exports parsed Surge Snell shadow-tls lines to sing-box chained outbounds', function () {
+        const [proxy] = ProxyUtils.parse(
+            'Surge Snell ShadowTLS = snell,surge-snell.example.com,443,psk=secret,version=5,reuse=true,tfo=true,udp-relay=false,underlying-proxy=proxy-out,shadow-tls-password=shadow-pass,shadow-tls-sni=mask.example.com,shadow-tls-version=3',
+        );
+
+        const output = loadProducedJson('sing-box', proxy, {
+            'include-unsupported-proxy': true,
+        });
+
+        expectSubset(output.outbounds[0], {
+            tag: 'Surge Snell ShadowTLS',
+            type: 'snell',
+            psk: 'secret',
+            version: 5,
+            reuse: true,
+            network: 'tcp',
+            detour: 'Surge Snell ShadowTLS_shadowtls',
+        });
+        expectSubset(output.outbounds[1], {
+            tag: 'Surge Snell ShadowTLS_shadowtls',
+            type: 'shadowtls',
+            server: 'surge-snell.example.com',
+            server_port: 443,
+            version: 3,
+            password: 'shadow-pass',
+            detour: 'proxy-out',
+            tls: {
+                server_name: 'mask.example.com',
+            },
+        });
+    });
+
+    it('exports parsed Surge Snell shadow-tls ALPN lines to sing-box chained outbounds', function () {
+        const [proxy] = ProxyUtils.parse(
+            'Surge Snell ShadowTLS ALPN = snell,surge-snell.example.com,443,psk=secret,version=5,alpn="h2,http/1.1",shadow-tls-password=shadow-pass,shadow-tls-sni=mask.example.com,shadow-tls-version=3',
+        );
+
+        const output = loadProducedJson('sing-box', proxy, {
+            'include-unsupported-proxy': true,
+        });
+
+        expectSubset(output.outbounds[1], {
+            tag: 'Surge Snell ShadowTLS ALPN_shadowtls',
+            type: 'shadowtls',
+            tls: {
+                server_name: 'mask.example.com',
+                alpn: ['h2', 'http/1.1'],
+            },
+        });
+    });
+
+    it('emits Mihomo Snell shadow-tls as obfs-opts mode shadow-tls', function () {
+        const proxy = {
+            type: 'snell',
+            name: 'Mihomo Snell ShadowTLS',
+            server: 'mihomo-snell.example.com',
+            port: 443,
+            psk: 'secret',
+            version: 4,
+            udp: false,
+            plugin: 'shadow-tls',
+            'plugin-opts': {
+                host: 'mask.example.com',
+                password: 'shadow-pass',
+                version: 2,
+                alpn: ['h2', 'http/1.1'],
+            },
+        };
+
+        const internal = produceInternal('Mihomo', proxy);
+        const external = loadProducedYaml('Mihomo', proxy);
+
+        expectSubset(internal[0], {
+            type: 'snell',
+            name: 'Mihomo Snell ShadowTLS',
+            server: 'mihomo-snell.example.com',
+            port: 443,
+            psk: 'secret',
+            version: 4,
+            'obfs-opts': {
+                mode: 'shadow-tls',
+                host: 'mask.example.com',
+                password: 'shadow-pass',
+                version: 2,
+                alpn: ['h2', 'http/1.1'],
+            },
+        });
+        expect(internal[0]).to.not.have.property('plugin');
+        expect(internal[0]).to.not.have.property('plugin-opts');
+        expectSubset(external.proxies[0], {
+            type: 'snell',
+            name: 'Mihomo Snell ShadowTLS',
+            'obfs-opts': {
+                mode: 'shadow-tls',
+                host: 'mask.example.com',
+                password: 'shadow-pass',
+                version: 2,
+                alpn: ['h2', 'http/1.1'],
+            },
+        });
+        expect(external.proxies[0]).to.not.have.property('plugin');
+        expect(external.proxies[0]).to.not.have.property('plugin-opts');
+    });
+
+    it('filters Mihomo Snell shadow-tls when obfs also exists', function () {
+        const proxy = {
+            type: 'snell',
+            name: 'Mihomo Snell ShadowTLS With Obfs',
+            server: 'mihomo-snell.example.com',
+            port: 443,
+            psk: 'secret',
+            version: 4,
+            plugin: 'shadow-tls',
+            'plugin-opts': {
+                host: 'mask.example.com',
+                password: 'shadow-pass',
+                version: 2,
+            },
+            'obfs-opts': {
+                mode: 'http',
+                host: 'obfs.example.com',
+            },
+        };
+
+        const { result: internal, errors } = captureErrors(() =>
+            produceInternal('Mihomo', proxy),
+        );
+        const { result: external, errors: externalErrors } = captureErrors(() =>
+            loadProducedYaml('Mihomo', proxy, { prettyYaml: false }),
+        );
+
+        expect(errors).to.deep.equal([
+            'Platform Mihomo does not support Snell shadow-tls with obfs for proxy Mihomo Snell ShadowTLS With Obfs. Proxy has been filtered.',
+        ]);
+        expect(externalErrors).to.deep.equal(errors);
+        expect(internal).to.have.length(0);
+        expect(external).to.deep.equal({ proxies: null });
+    });
+
+    it('exports Mihomo-style Snell obfs shadow-tls objects to sing-box chained outbounds', function () {
+        const [proxy] = ProxyUtils.parse(`proxies:
+  - name: Mihomo Snell ShadowTLS
+    type: snell
+    server: mihomo-snell.example.com
+    port: 443
+    psk: secret
+    version: 4
+    udp: false
+    obfs-opts:
+      mode: shadow-tls
+      host: mask.example.com
+      password: shadow-pass
+      version: 2
+      alpn:
+        - h2
+        - http/1.1`);
+
+        const output = loadProducedJson('sing-box', proxy, {
+            'include-unsupported-proxy': true,
+        });
+
+        expectSubset(output.outbounds[0], {
+            tag: 'Mihomo Snell ShadowTLS',
+            type: 'snell',
+            psk: 'secret',
+            version: 4,
+            network: 'tcp',
+            detour: 'Mihomo Snell ShadowTLS_shadowtls',
+        });
+        expectSubset(output.outbounds[1], {
+            tag: 'Mihomo Snell ShadowTLS_shadowtls',
+            type: 'shadowtls',
+            server: 'mihomo-snell.example.com',
+            server_port: 443,
+            version: 2,
+            password: 'shadow-pass',
+            tls: {
+                server_name: 'mask.example.com',
+                alpn: ['h2', 'http/1.1'],
+            },
+        });
+    });
+
+    it('exports Shadowsocks shadow-tls plugin ALPN to sing-box shadowtls tls options', function () {
+        const [proxy] = ProxyUtils.parse(`proxies:
+  - name: SS ShadowTLS ALPN
+    type: ss
+    server: ss.example.com
+    port: 443
+    cipher: chacha20-ietf-poly1305
+    password: password
+    plugin: shadow-tls
+    client-fingerprint: chrome
+    plugin-opts:
+      host: cloud.tencent.com
+      password: shadow_tls_password
+      version: 2
+      alpn:
+        - h2
+        - http/1.1`);
+
+        const output = loadProducedJson('sing-box', proxy);
+
+        expect(output.outbounds).to.have.length(2);
+        expectSubset(output.outbounds[0], {
+            tag: 'SS ShadowTLS ALPN',
+            type: 'shadowsocks',
+            method: 'chacha20-ietf-poly1305',
+            password: 'password',
+            detour: 'SS ShadowTLS ALPN_shadowtls',
+        });
+        expectSubset(output.outbounds[1], {
+            tag: 'SS ShadowTLS ALPN_shadowtls',
+            type: 'shadowtls',
+            server: 'ss.example.com',
+            server_port: 443,
+            version: 2,
+            password: 'shadow_tls_password',
+            tls: {
+                enabled: true,
+                server_name: 'cloud.tencent.com',
+                alpn: ['h2', 'http/1.1'],
+                utls: {
+                    enabled: true,
+                    fingerprint: 'chrome',
+                },
+            },
+        });
+    });
+
+    it('does not emit sing-box ShadowTLS uTLS without client fingerprint', function () {
+        const [proxy] = ProxyUtils.parse(`proxies:
+  - name: SS ShadowTLS No Fingerprint
+    type: ss
+    server: ss.example.com
+    port: 443
+    cipher: 2022-blake3-aes-128-gcm
+    password: password
+    udp-over-tcp: true
+    udp-over-tcp-version: 2
+    plugin: shadow-tls
+    plugin-opts:
+      host: gateway.icloud.com
+      password: shadow_tls_password
+      version: 3`);
+
+        const output = loadProducedJson('sing-box', proxy);
+        const shadowtls = output.outbounds.find(
+            (item) => item.tag === 'SS ShadowTLS No Fingerprint_shadowtls',
+        );
+
+        expectSubset(shadowtls, {
+            tls: {
+                enabled: true,
+                server_name: 'gateway.icloud.com',
+            },
+        });
+        expect(shadowtls.tls).to.not.have.property('utls');
+    });
+
+    it('omits unsupported sing-box ShadowTLS uTLS fingerprints', function () {
+        const [proxy] = ProxyUtils.parse(`proxies:
+  - name: SS ShadowTLS Unsupported Fingerprint
+    type: ss
+    server: ss.example.com
+    port: 443
+    cipher: chacha20-ietf-poly1305
+    password: password
+    plugin: shadow-tls
+    client-fingerprint: chrome120
+    plugin-opts:
+      host: cloud.tencent.com
+      password: shadow_tls_password
+      version: 2`);
+
+        const output = loadProducedJson('sing-box', proxy);
+        const shadowtls = output.outbounds.find(
+            (item) =>
+                item.tag === 'SS ShadowTLS Unsupported Fingerprint_shadowtls',
+        );
+
+        expectSubset(shadowtls, {
+            tls: {
+                enabled: true,
+                server_name: 'cloud.tencent.com',
+            },
+        });
+        expect(shadowtls.tls).to.not.have.property('utls');
+    });
+
+    it('keeps only Shadowsocks shadow-tls versions 1 through 3 for Mihomo', function () {
+        const buildShadowTlsProxy = (name, version) => ({
+            type: 'ss',
+            name,
+            server: 'ss.example.com',
+            port: 8388,
+            cipher: 'aes-128-gcm',
+            password: 'secret',
+            plugin: 'shadow-tls',
+            'plugin-opts': {
+                host: 'mask.example.com',
+                password: 'shadow-pass',
+                version,
+            },
+        });
+        const proxies = [
+            buildShadowTlsProxy('ShadowTLS 1', 1),
+            {
+                type: 'ss',
+                name: 'ShadowTLS 2',
+                server: 'ss.example.com',
+                port: 8388,
+                cipher: 'aes-128-gcm',
+                password: 'secret',
+                plugin: 'shadow-tls',
+                'plugin-opts': {
+                    host: 'mask.example.com',
+                    password: 'shadow-pass',
+                    version: 2,
+                },
+            },
+            buildShadowTlsProxy('ShadowTLS 3', 3),
+            buildShadowTlsProxy('ShadowTLS 4', 4),
+            {
+                type: 'vmess',
+                name: 'VMess ShadowTLS',
+                server: 'vmess.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                plugin: 'shadow-tls',
+                'plugin-opts': {
+                    host: 'mask.example.com',
+                    password: 'shadow-pass',
+                    version: 3,
+                },
+            },
+        ];
+
+        const internal = produceInternal('Mihomo', proxies);
+        const external = loadProducedYaml('Mihomo', proxies);
+
+        expect(internal.map((proxy) => proxy.name)).to.deep.equal([
+            'ShadowTLS 1',
+            'ShadowTLS 2',
+            'ShadowTLS 3',
+        ]);
+        expect(
+            internal.map((proxy) => proxy['plugin-opts'].version),
+        ).to.deep.equal([1, 2, 3]);
+        expect(external.proxies.map((proxy) => proxy.name)).to.deep.equal([
+            'ShadowTLS 1',
+            'ShadowTLS 2',
+            'ShadowTLS 3',
+        ]);
     });
 
     it('keeps only supported shadowsocks v2ray-plugin modes for Shadowrocket by default', function () {
@@ -524,6 +1295,8 @@ describe('Proxy structured producers', function () {
                 'no-grpc-header': true,
                 'x-padding-bytes': '64-128',
                 'sc-min-posts-interval-ms': 300,
+                'session-table': 'Base62',
+                'session-length': '16-32',
             },
         };
 
@@ -546,6 +1319,8 @@ describe('Proxy structured producers', function () {
                 'no-grpc-header': true,
                 'x-padding-bytes': '64-128',
                 'sc-min-posts-interval-ms': 300,
+                'session-table': 'Base62',
+                'session-length': '16-32',
             },
         });
         expectSubset(external.proxies[0], {
@@ -555,6 +1330,8 @@ describe('Proxy structured producers', function () {
             servername: 'sni.example.com',
             'xhttp-opts': {
                 'sc-min-posts-interval-ms': 300,
+                'session-table': 'Base62',
+                'session-length': '16-32',
             },
         });
     });
@@ -631,6 +1408,8 @@ describe('Proxy structured producers', function () {
                     path: '/download',
                     host: 'download-host.example.com',
                     'sc-min-posts-interval-ms': 300,
+                    'session-table': 'Base62',
+                    'session-length': '8-12',
                     'reuse-settings': {
                         'max-connections': '8',
                         'h-max-reusable-secs': '900',
@@ -658,6 +1437,8 @@ describe('Proxy structured producers', function () {
                     path: '/download',
                     host: 'download-host.example.com',
                     'sc-min-posts-interval-ms': 300,
+                    'session-table': 'Base62',
+                    'session-length': '8-12',
                     'reuse-settings': {
                         'max-connections': '8',
                         'h-max-reusable-secs': '900',
@@ -679,6 +1460,8 @@ describe('Proxy structured producers', function () {
                     path: '/download',
                     host: 'download-host.example.com',
                     'sc-min-posts-interval-ms': 300,
+                    'session-table': 'Base62',
+                    'session-length': '8-12',
                     'reuse-settings': {
                         'max-connections': '8',
                         'h-max-reusable-secs': '900',
@@ -1110,7 +1893,7 @@ describe('Proxy structured producers', function () {
         });
     });
 
-    it('promotes shadow-tls fields for Shadowrocket', function () {
+    it('keeps shadow-tls plugin objects for Shadowrocket', function () {
         const proxy = {
             type: 'ss',
             name: 'ShadowTLS SS',
@@ -1118,9 +1901,12 @@ describe('Proxy structured producers', function () {
             port: 8388,
             cipher: 'aes-128-gcm',
             password: 'secret',
-            'shadow-tls-password': 'shadow-pass',
-            'shadow-tls-sni': 'mask.example.com',
-            'shadow-tls-version': 3,
+            plugin: 'shadow-tls',
+            'plugin-opts': {
+                host: 'mask.example.com',
+                password: 'shadow-pass',
+                version: 3,
+            },
             'skip-cert-verify': true,
         };
 
@@ -1141,6 +1927,86 @@ describe('Proxy structured producers', function () {
             type: 'ss',
             plugin: 'shadow-tls',
         });
+    });
+
+    it('emits Snell shadow-tls as obfs-opts mode shadow-tls for Shadowrocket', function () {
+        const proxy = {
+            type: 'snell',
+            name: 'Shadowrocket Snell ShadowTLS',
+            server: 'snell.example.com',
+            port: 44046,
+            psk: 'secret',
+            version: 4,
+            plugin: 'shadow-tls',
+            'plugin-opts': {
+                host: 'mask.example.com',
+                password: 'shadow-pass',
+                version: 2,
+                alpn: ['h2', 'http/1.1'],
+            },
+        };
+
+        const internal = produceInternal('Shadowrocket', proxy)[0];
+        const external = loadProducedYaml('Shadowrocket', proxy);
+
+        expectSubset(internal, {
+            type: 'snell',
+            name: 'Shadowrocket Snell ShadowTLS',
+            'obfs-opts': {
+                mode: 'shadow-tls',
+                host: 'mask.example.com',
+                password: 'shadow-pass',
+                version: 2,
+                alpn: ['h2', 'http/1.1'],
+            },
+        });
+        expect(internal).to.not.have.property('plugin');
+        expect(internal).to.not.have.property('plugin-opts');
+        expectSubset(external.proxies[0], {
+            type: 'snell',
+            'obfs-opts': {
+                mode: 'shadow-tls',
+                host: 'mask.example.com',
+                password: 'shadow-pass',
+                version: 2,
+                alpn: ['h2', 'http/1.1'],
+            },
+        });
+    });
+
+    it('filters Shadowrocket Snell shadow-tls when obfs also exists', function () {
+        const proxy = {
+            type: 'snell',
+            name: 'Shadowrocket Snell ShadowTLS With Obfs',
+            server: 'snell.example.com',
+            port: 44046,
+            psk: 'secret',
+            version: 4,
+            plugin: 'shadow-tls',
+            'plugin-opts': {
+                host: 'mask.example.com',
+                password: 'shadow-pass',
+                version: 2,
+            },
+            'obfs-opts': {
+                mode: 'http',
+                host: 'obfs.example.com',
+            },
+        };
+
+        const { result: internal, errors } = captureErrors(() =>
+            produceInternal('Shadowrocket', proxy),
+        );
+        const { result: external, errors: externalErrors } = captureErrors(() =>
+            loadProducedYaml('Shadowrocket', proxy, { prettyYaml: false }),
+        );
+
+        expect(errors).to.deep.equal([
+            'Platform Shadowrocket does not support Snell shadow-tls with obfs for proxy Shadowrocket Snell ShadowTLS With Obfs. Proxy has been filtered.',
+        ]);
+        expect(externalErrors).to.deep.equal(errors);
+        expect(internal).to.have.length(0);
+        expect(external).to.deep.equal({ proxies: null });
     });
 
     it('maps canonical shadowsocks tls fields into Shadowrocket structured output', function () {
@@ -1241,7 +2107,7 @@ describe('Proxy structured producers', function () {
         // expect(external.proxies[0]).to.not.have.property('sni');
     });
 
-    it('maps shadowsocks shadow-tls fields into Egern nested structures', function () {
+    it('maps shadowsocks shadow-tls plugin objects into Egern nested structures', function () {
         const proxy = {
             type: 'ss',
             name: 'ShadowTLS SS',
@@ -1249,9 +2115,12 @@ describe('Proxy structured producers', function () {
             port: 8388,
             cipher: 'aes-128-gcm',
             password: 'secret',
-            'shadow-tls-password': 'shadow-pass',
-            'shadow-tls-sni': 'mask.example.com',
-            'shadow-tls-version': 3,
+            plugin: 'shadow-tls',
+            'plugin-opts': {
+                host: 'mask.example.com',
+                password: 'shadow-pass',
+                version: 3,
+            },
         };
 
         const internal = produceInternal('Egern', proxy)[0];
@@ -1273,6 +2142,116 @@ describe('Proxy structured producers', function () {
         expectSubset(external.proxies[0], {
             shadowsocks: {
                 name: 'ShadowTLS SS',
+            },
+        });
+    });
+
+    it('emits Egern SSH nodes with auth, host keys, flags, and shadow-tls', function () {
+        const proxies = [
+            {
+                type: 'ssh',
+                name: 'Egern SSH Plugin',
+                server: 'ssh.example.com',
+                port: 443,
+                username: 'user',
+                password: 'pass',
+                'private-key': 'ssh-key',
+                'host-key': ['ssh-ed25519 AAAATEST'],
+                tfo: true,
+                'block-quic': 'off',
+                plugin: 'shadow-tls',
+                'plugin-opts': {
+                    host: 'mask.example.com',
+                    password: 'shadow-pass',
+                    version: 3,
+                },
+            },
+            {
+                type: 'ss',
+                name: 'Healthy SS',
+                server: 'ss.example.com',
+                port: 8388,
+                cipher: 'aes-128-gcm',
+                password: 'secret',
+            },
+        ];
+        const getProxy = (items, type, name) =>
+            items.find((item) => item[type]?.name === name)?.[type];
+
+        const internal = produceInternal('Egern', proxies);
+        const external = loadProducedYaml('Egern', proxies);
+
+        for (const output of [internal, external.proxies]) {
+            expectSubset(getProxy(output, 'ssh', 'Egern SSH Plugin'), {
+                name: 'Egern SSH Plugin',
+                server: 'ssh.example.com',
+                port: 443,
+                username: 'user',
+                password: 'pass',
+                private_key: 'ssh-key',
+                host_keys: ['ssh-ed25519 AAAATEST'],
+                tfo: true,
+                block_quic: false,
+                shadow_tls: {
+                    password: 'shadow-pass',
+                    sni: 'mask.example.com',
+                },
+            });
+            expectSubset(getProxy(output, 'shadowsocks', 'Healthy SS'), {
+                method: 'aes-128-gcm',
+                password: 'secret',
+            });
+        }
+    });
+
+    it('skips Egern SSH with unsupported shadow-tls versions', function () {
+        const proxies = [
+            {
+                type: 'ssh',
+                name: 'Invalid SSH ShadowTLS',
+                server: 'ssh.example.com',
+                port: 443,
+                username: 'user',
+                plugin: 'shadow-tls',
+                'plugin-opts': {
+                    host: 'mask.example.com',
+                    password: 'shadow-pass',
+                    version: 2,
+                },
+            },
+            {
+                type: 'ss',
+                name: 'Healthy SS',
+                server: 'ss.example.com',
+                port: 8388,
+                cipher: 'aes-128-gcm',
+                password: 'secret',
+            },
+        ];
+
+        const { result, errors } = captureErrors(() =>
+            produceInternal('Egern', proxies),
+        );
+        const { result: external, errors: externalErrors } = captureErrors(() =>
+            loadProducedYaml('Egern', proxies),
+        );
+
+        expect(result).to.have.length(1);
+        expect(errors).to.have.length(1);
+        expect(errors[0]).to.include('shadow-tls version 2 is not supported');
+        expect(externalErrors).to.have.length(1);
+        expect(externalErrors[0]).to.include(
+            'shadow-tls version 2 is not supported',
+        );
+        expectSubset(result[0], {
+            shadowsocks: {
+                name: 'Healthy SS',
+            },
+        });
+        expect(external.proxies).to.have.length(1);
+        expectSubset(external.proxies[0], {
+            shadowsocks: {
+                name: 'Healthy SS',
             },
         });
     });
@@ -1339,6 +2318,767 @@ describe('Proxy structured producers', function () {
                 },
             },
         });
+    });
+
+    it('emits Egern Hysteria2 upload bandwidth as bandwidth', function () {
+        const proxy = {
+            type: 'hysteria2',
+            name: 'Egern Hysteria2 Bandwidth',
+            server: 'hy2.example.com',
+            port: 443,
+            password: 'secret',
+            up: '50 Mbps',
+            sni: 'peer.example.com',
+        };
+
+        const internal = produceInternal('Egern', proxy)[0];
+        const external = loadProducedYaml('Egern', proxy);
+
+        expectSubset(internal, {
+            hysteria2: {
+                name: 'Egern Hysteria2 Bandwidth',
+                bandwidth: 50,
+            },
+        });
+        expectSubset(external.proxies[0], {
+            hysteria2: {
+                name: 'Egern Hysteria2 Bandwidth',
+                bandwidth: 50,
+            },
+        });
+    });
+
+    it('emits Egern Snell versions 1 through 5', function () {
+        const proxies = [1, 2, 3, 4, 5, 6, '4x'].map((version) => ({
+            type: 'snell',
+            name: `Egern Snell ${version}`,
+            server: 'snell.example.com',
+            port: 44046,
+            psk: 'secret',
+            version,
+            udp: true,
+            reuse: true,
+            tfo: true,
+            'block-quic': 'on',
+            'obfs-opts': {
+                mode: 'http',
+                host: 'obfs.example.com',
+            },
+        }));
+        const getProxy = (items, name) =>
+            items.find((item) => item.snell?.name === name)?.snell;
+        const getVersions = (items) => items.map((item) => item.snell.version);
+
+        const internal = produceInternal('Egern', proxies);
+        const external = loadProducedYaml('Egern', proxies);
+
+        expect(getVersions(internal)).to.deep.equal([1, 2, 3, 4, 5]);
+        expect(getVersions(external.proxies)).to.deep.equal([1, 2, 3, 4, 5]);
+        expect(getProxy(internal, 'Egern Snell 1')).to.not.have.property(
+            'udp_relay',
+        );
+        expect(getProxy(internal, 'Egern Snell 2')).to.not.have.property(
+            'udp_relay',
+        );
+        for (const output of [internal, external.proxies]) {
+            expectSubset(getProxy(output, 'Egern Snell 5'), {
+                name: 'Egern Snell 5',
+                server: 'snell.example.com',
+                port: 44046,
+                psk: 'secret',
+                version: 5,
+                udp_relay: true,
+                reuse: true,
+                obfs: 'http',
+                obfs_host: 'obfs.example.com',
+                tfo: true,
+                block_quic: true,
+            });
+        }
+    });
+
+    it('emits Egern Snell shadow-tls variants', function () {
+        const proxies = [
+            {
+                type: 'snell',
+                name: 'Egern Snell ShadowTLS',
+                server: 'snell-shadowtls.example.com',
+                port: 44046,
+                psk: 'secret',
+                version: 5,
+                plugin: 'shadow-tls',
+                'plugin-opts': {
+                    host: 'mask.example.com',
+                    password: 'shadow-pass',
+                    version: 3,
+                },
+            },
+            {
+                type: 'snell',
+                name: 'Egern Snell Plain',
+                server: 'snell.example.com',
+                port: 44046,
+                psk: 'secret',
+                version: 5,
+            },
+        ];
+
+        const internal = produceInternal('Egern', proxies);
+        const external = loadProducedYaml('Egern', proxies);
+
+        for (const output of [internal, external.proxies]) {
+            expect(output).to.have.length(2);
+            expectSubset(output[0], {
+                snell: {
+                    name: 'Egern Snell ShadowTLS',
+                    server: 'snell-shadowtls.example.com',
+                    version: 5,
+                    shadow_tls: {
+                        password: 'shadow-pass',
+                        sni: 'mask.example.com',
+                    },
+                },
+            });
+            expectSubset(output[1], {
+                snell: {
+                    name: 'Egern Snell Plain',
+                    server: 'snell.example.com',
+                    version: 5,
+                },
+            });
+        }
+    });
+
+    it('emits Egern SOCKS5 over TLS and root REALITY options', function () {
+        const proxies = [
+            {
+                type: 'socks5',
+                name: 'Egern SOCKS5 TLS Reality',
+                server: 'socks.example.com',
+                port: 1080,
+                username: 'user',
+                password: 'pass',
+                tls: true,
+                sni: 'socks-sni.example.com',
+                tfo: false,
+                udp: true,
+                'skip-cert-verify': false,
+                'tls-fingerprint': 'SHA256:SOCKS',
+                'reality-opts': {
+                    'public-key': 'socks-pub',
+                    'short-id': '01',
+                },
+            },
+            {
+                type: 'https',
+                name: 'Egern HTTPS Reality',
+                server: 'https.example.com',
+                port: 443,
+                sni: 'https-sni.example.com',
+                'skip-cert-verify': true,
+                'reality-opts': {
+                    'public-key': 'https-pub',
+                    'short-id': '02',
+                },
+            },
+            {
+                type: 'trojan',
+                name: 'Egern Trojan Reality',
+                server: 'trojan.example.com',
+                port: 443,
+                password: 'secret',
+                tfo: false,
+                udp: true,
+                'skip-cert-verify': false,
+                'reality-opts': {
+                    'public-key': 'trojan-pub',
+                    'short-id': '03',
+                },
+            },
+            {
+                type: 'anytls',
+                name: 'Egern AnyTLS Reality',
+                server: 'anytls.example.com',
+                port: 443,
+                password: 'secret',
+                network: 'tcp',
+                'reality-opts': {
+                    'public-key': 'anytls-pub',
+                    'short-id': '04',
+                },
+            },
+        ];
+        const getProxy = (items, type, name) =>
+            items.find((item) => item[type]?.name === name)?.[type];
+
+        const internal = produceInternal('Egern', proxies);
+        const external = loadProducedYaml('Egern', proxies);
+
+        for (const output of [internal, external.proxies]) {
+            expectSubset(
+                getProxy(output, 'socks5_tls', 'Egern SOCKS5 TLS Reality'),
+                {
+                    server: 'socks.example.com',
+                    port: 1080,
+                    username: 'user',
+                    password: 'pass',
+                    tfo: false,
+                    udp_relay: true,
+                    skip_tls_verify: false,
+                    fingerprint_sha256: 'SHA256:SOCKS',
+                    reality: {
+                        public_key: 'socks-pub',
+                        short_id: '01',
+                    },
+                },
+            );
+            expectSubset(getProxy(output, 'https', 'Egern HTTPS Reality'), {
+                skip_tls_verify: true,
+                reality: {
+                    public_key: 'https-pub',
+                    short_id: '02',
+                },
+            });
+            expectSubset(getProxy(output, 'trojan', 'Egern Trojan Reality'), {
+                tfo: false,
+                udp_relay: true,
+                skip_tls_verify: false,
+                reality: {
+                    public_key: 'trojan-pub',
+                    short_id: '03',
+                },
+            });
+            expectSubset(getProxy(output, 'anytls', 'Egern AnyTLS Reality'), {
+                reality: {
+                    public_key: 'anytls-pub',
+                    short_id: '04',
+                },
+            });
+        }
+    });
+
+    it('emits Egern VMess and VLESS gRPC Gun transports with REALITY', function () {
+        const proxies = [
+            {
+                type: 'vmess',
+                name: 'Egern VMess gRPC Reality',
+                server: 'vmess.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'aes-128-gcm',
+                alterId: 0,
+                tls: true,
+                sni: 'vmess-sni.example.com',
+                network: 'grpc',
+                tfo: false,
+                udp: true,
+                'skip-cert-verify': true,
+                'tls-fingerprint': 'SHA256:GRPC',
+                'grpc-opts': {
+                    'grpc-service-name': 'vmess-service',
+                    '_grpc-type': 'gun',
+                },
+                'reality-opts': {
+                    'public-key': 'vmess-pub',
+                    'short-id': '05',
+                },
+            },
+            {
+                type: 'vless',
+                name: 'Egern VLESS gRPC Reality',
+                server: 'vless.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                sni: 'vless-sni.example.com',
+                network: 'grpc',
+                'grpc-opts': {
+                    'grpc-service-name': 'vless-service',
+                },
+                'reality-opts': {
+                    'public-key': 'vless-pub',
+                    'short-id': '06',
+                },
+            },
+            {
+                type: 'vmess',
+                name: 'Egern VMess gRPC Multi',
+                server: 'vmess-multi.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                network: 'grpc',
+                'grpc-opts': {
+                    'grpc-service-name': 'multi-service',
+                    '_grpc-type': 'multi',
+                },
+            },
+        ];
+        const getProxy = (items, type, name) =>
+            items.find((item) => item[type]?.name === name)?.[type];
+
+        const internal = produceInternal('Egern', proxies);
+        const external = loadProducedYaml('Egern', proxies);
+
+        for (const output of [internal, external.proxies]) {
+            expect(output).to.have.length(2);
+            expectSubset(
+                getProxy(output, 'vmess', 'Egern VMess gRPC Reality'),
+                {
+                    user_id: UUID,
+                    security: 'aes-128-gcm',
+                    legacy: false,
+                    tfo: false,
+                    udp_relay: true,
+                    transport: {
+                        grpc: {
+                            service_name: 'vmess-service',
+                            sni: 'vmess-sni.example.com',
+                            skip_tls_verify: true,
+                            fingerprint_sha256: 'SHA256:GRPC',
+                            reality: {
+                                public_key: 'vmess-pub',
+                                short_id: '05',
+                            },
+                        },
+                    },
+                },
+            );
+            expectSubset(
+                getProxy(output, 'vless', 'Egern VLESS gRPC Reality'),
+                {
+                    user_id: UUID,
+                    transport: {
+                        grpc: {
+                            service_name: 'vless-service',
+                            sni: 'vless-sni.example.com',
+                            reality: {
+                                public_key: 'vless-pub',
+                                short_id: '06',
+                            },
+                        },
+                    },
+                },
+            );
+        }
+    });
+
+    it('emits Egern fingerprint_sha256 for supported TLS proxy types and transports', function () {
+        const fingerprint = 'SHA256:FINGERPRINT';
+        const proxies = [
+            {
+                type: 'http',
+                name: 'Egern HTTPS Fingerprint',
+                server: 'https.example.com',
+                port: 443,
+                tls: true,
+                sni: 'sni.example.com',
+                'tls-fingerprint': fingerprint,
+            },
+            {
+                type: 'https',
+                name: 'Egern Direct HTTPS Fingerprint',
+                server: 'direct-https.example.com',
+                port: 443,
+                sni: 'direct-sni.example.com',
+                'tls-fingerprint': fingerprint,
+            },
+            {
+                type: 'trojan',
+                name: 'Egern Trojan Fingerprint',
+                server: 'trojan.example.com',
+                port: 443,
+                password: 'secret',
+                'tls-fingerprint': fingerprint,
+            },
+            {
+                type: 'anytls',
+                name: 'Egern AnyTLS Fingerprint',
+                server: 'anytls.example.com',
+                port: 443,
+                password: 'secret',
+                'tls-fingerprint': fingerprint,
+            },
+            {
+                type: 'hysteria2',
+                name: 'Egern Hysteria2 Fingerprint',
+                server: 'hy2.example.com',
+                port: 443,
+                password: 'secret',
+                'tls-fingerprint': fingerprint,
+            },
+            {
+                type: 'tuic',
+                name: 'Egern TUIC Fingerprint',
+                server: 'tuic.example.com',
+                port: 443,
+                uuid: UUID,
+                password: 'secret',
+                'tls-fingerprint': fingerprint,
+            },
+            {
+                type: 'vmess',
+                name: 'Egern VMess H2 Fingerprint',
+                server: 'vmess-h2.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                tls: true,
+                network: 'h2',
+                sni: 'vmess-h2.example.com',
+                'h2-opts': {
+                    path: '/h2',
+                    host: ['h2.example.com'],
+                    headers: {
+                        Host: 'fallback-h2.example.com',
+                        b: 'a,b',
+                    },
+                },
+                'tls-fingerprint': fingerprint,
+            },
+            {
+                type: 'vmess',
+                name: 'Egern VMess TLS Fingerprint',
+                server: 'vmess-tls.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                tls: true,
+                network: 'tcp',
+                sni: 'vmess-tls.example.com',
+                'tls-fingerprint': fingerprint,
+            },
+            {
+                type: 'vmess',
+                name: 'Egern VMess WSS Fingerprint',
+                server: 'vmess-wss.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                tls: true,
+                network: 'ws',
+                sni: 'vmess-wss.example.com',
+                'ws-opts': {
+                    path: '/ws',
+                    headers: {
+                        Host: 'cdn.example.com',
+                    },
+                },
+                'tls-fingerprint': fingerprint,
+            },
+            {
+                type: 'vless',
+                name: 'Egern VLESS H2 Fingerprint',
+                server: 'vless-h2.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                network: 'h2',
+                sni: 'vless-h2.example.com',
+                'h2-opts': {
+                    path: '/h2',
+                    host: ['h2.example.com'],
+                    headers: {
+                        Host: 'fallback-h2.example.com',
+                        b: 'a,b',
+                    },
+                },
+                'tls-fingerprint': fingerprint,
+            },
+            {
+                type: 'vless',
+                name: 'Egern VLESS TLS Fingerprint',
+                server: 'vless-tls.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                network: 'tcp',
+                sni: 'vless-tls.example.com',
+                'tls-fingerprint': fingerprint,
+            },
+            {
+                type: 'vless',
+                name: 'Egern VLESS WSS Fingerprint',
+                server: 'vless-wss.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                network: 'ws',
+                sni: 'vless-wss.example.com',
+                'ws-opts': {
+                    path: '/ws',
+                    headers: {
+                        Host: 'cdn.example.com',
+                    },
+                },
+                'tls-fingerprint': fingerprint,
+            },
+        ];
+        const getProxy = (items, type, name) =>
+            items.find((item) => item[type]?.name === name)?.[type];
+
+        const internal = produceInternal('Egern', proxies);
+        const external = loadProducedYaml('Egern', proxies);
+
+        for (const output of [internal, external.proxies]) {
+            for (const [type, name] of [
+                ['https', 'Egern HTTPS Fingerprint'],
+                ['https', 'Egern Direct HTTPS Fingerprint'],
+                ['trojan', 'Egern Trojan Fingerprint'],
+                ['anytls', 'Egern AnyTLS Fingerprint'],
+                ['hysteria2', 'Egern Hysteria2 Fingerprint'],
+                ['tuic', 'Egern TUIC Fingerprint'],
+            ]) {
+                const producedProxy = getProxy(output, type, name);
+                expectSubset(producedProxy, {
+                    fingerprint_sha256: fingerprint,
+                });
+                expect(producedProxy).to.not.have.property('tls-fingerprint');
+            }
+
+            for (const [type, name, transport] of [
+                ['vmess', 'Egern VMess H2 Fingerprint', 'http2'],
+                ['vmess', 'Egern VMess TLS Fingerprint', 'tls'],
+                ['vmess', 'Egern VMess WSS Fingerprint', 'wss'],
+                ['vless', 'Egern VLESS H2 Fingerprint', 'http2'],
+                ['vless', 'Egern VLESS TLS Fingerprint', 'tls'],
+                ['vless', 'Egern VLESS WSS Fingerprint', 'wss'],
+            ]) {
+                const producedProxy = getProxy(output, type, name);
+                expectSubset(producedProxy, {
+                    transport: {
+                        [transport]: {
+                            fingerprint_sha256: fingerprint,
+                        },
+                    },
+                });
+                expect(producedProxy).to.not.have.property('tls-fingerprint');
+            }
+
+            expectSubset(
+                getProxy(output, 'vmess', 'Egern VMess H2 Fingerprint'),
+                {
+                    transport: {
+                        http2: {
+                            headers: {
+                                Host: 'h2.example.com',
+                                b: 'a,b',
+                            },
+                            sni: 'vmess-h2.example.com',
+                        },
+                    },
+                },
+            );
+            expectSubset(
+                getProxy(output, 'vless', 'Egern VLESS H2 Fingerprint'),
+                {
+                    transport: {
+                        http2: {
+                            headers: {
+                                Host: 'h2.example.com',
+                                b: 'a,b',
+                            },
+                            sni: 'vless-h2.example.com',
+                        },
+                    },
+                },
+            );
+        }
+    });
+
+    it('omits Egern fingerprint_sha256 for blank fingerprints and non-TLS transports', function () {
+        const proxies = [
+            {
+                type: 'http',
+                name: 'Egern HTTP Plain Fingerprint',
+                server: 'http.example.com',
+                port: 8080,
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+            },
+            {
+                type: 'https',
+                name: 'Egern HTTPS Blank Fingerprint',
+                server: 'https.example.com',
+                port: 443,
+                'tls-fingerprint': '   ',
+            },
+            {
+                type: 'vmess',
+                name: 'Egern VMess HTTP1 Fingerprint',
+                server: 'vmess-http.example.com',
+                port: 80,
+                uuid: UUID,
+                cipher: 'auto',
+                network: 'http',
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+            },
+            {
+                type: 'vmess',
+                name: 'Egern VMess WS Fingerprint',
+                server: 'vmess-ws.example.com',
+                port: 80,
+                uuid: UUID,
+                cipher: 'auto',
+                network: 'ws',
+                'ws-opts': {
+                    path: '/ws',
+                },
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+            },
+            {
+                type: 'vmess',
+                name: 'Egern VMess TCP Fingerprint',
+                server: 'vmess-tcp.example.com',
+                port: 80,
+                uuid: UUID,
+                cipher: 'auto',
+                network: 'tcp',
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+            },
+            {
+                type: 'vless',
+                name: 'Egern VLESS HTTP1 Fingerprint',
+                server: 'vless-http.example.com',
+                port: 80,
+                uuid: UUID,
+                network: 'http',
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+            },
+            {
+                type: 'vless',
+                name: 'Egern VLESS WS Fingerprint',
+                server: 'vless-ws.example.com',
+                port: 80,
+                uuid: UUID,
+                network: 'ws',
+                'ws-opts': {
+                    path: '/ws',
+                },
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+            },
+            {
+                type: 'vless',
+                name: 'Egern VLESS TCP Fingerprint',
+                server: 'vless-tcp.example.com',
+                port: 80,
+                uuid: UUID,
+                network: 'tcp',
+                'tls-fingerprint': 'SHA256:FINGERPRINT',
+            },
+        ];
+        const findByName = (items, name) =>
+            Object.values(
+                items.find((item) =>
+                    Object.values(item).some((proxy) => proxy?.name === name),
+                ),
+            )[0];
+        const expectNoFingerprint = (proxy) => {
+            expect(proxy).to.not.have.property('fingerprint_sha256');
+            expect(proxy).to.not.have.property('tls-fingerprint');
+            if (proxy.transport) {
+                for (const transport of Object.values(proxy.transport)) {
+                    expect(transport).to.not.have.property(
+                        'fingerprint_sha256',
+                    );
+                }
+            }
+        };
+
+        const internal = produceInternal('Egern', proxies);
+        const external = loadProducedYaml('Egern', proxies);
+
+        for (const output of [internal, external.proxies]) {
+            for (const proxy of proxies) {
+                expectNoFingerprint(findByName(output, proxy.name));
+            }
+        }
+    });
+
+    it('trims Egern fingerprint_sha256 values', function () {
+        const external = loadProducedYaml('Egern', {
+            type: 'https',
+            name: 'Egern HTTPS Trimmed Fingerprint',
+            server: 'https.example.com',
+            port: 443,
+            'tls-fingerprint': '  SHA256:FINGERPRINT  ',
+        });
+
+        expect(external.proxies[0].https.fingerprint_sha256).to.equal(
+            'SHA256:FINGERPRINT',
+        );
+    });
+
+    it('keeps Mihomo h2 headers while lifting Host into h2-opts host', function () {
+        const input = `proxies:
+  - name: vmess-h2
+    type: vmess
+    server: server
+    port: 443
+    uuid: ${UUID}
+    alterId: 32
+    cipher: auto
+    network: h2
+    tls: true
+    fingerprint: xxxx
+    h2-opts:
+      host:
+        - http.example.com
+        - http-alt.example.com
+      headers:
+        Host: v2ray.com
+        b: a
+      path:
+`;
+        const [proxy] = ProxyUtils.parse(input);
+        const external = loadProducedYaml('Mihomo', [proxy]);
+        const h2Opts = external.proxies[0]['h2-opts'];
+
+        expect(h2Opts).to.deep.equal({
+            host: ['http.example.com', 'http-alt.example.com'],
+            headers: {
+                b: 'a',
+            },
+            path: '/',
+        });
+        expect(external.proxies[0].servername).to.equal('http.example.com');
+        expect(h2Opts.headers).to.not.have.property('Host');
+        expect(h2Opts.headers).to.not.have.property('host');
+    });
+
+    it('keeps h2 Host arrays when lifting legacy headers into h2-opts host', function () {
+        const proxy = {
+            type: 'vmess',
+            name: 'VMess H2 Legacy Host Array',
+            server: 'server',
+            port: 443,
+            uuid: UUID,
+            alterId: 0,
+            cipher: 'auto',
+            tls: true,
+            network: 'h2',
+            'h2-opts': {
+                path: '/',
+                headers: {
+                    Host: ['cdn.example.com', 'alt.example.com'],
+                    'User-Agent': 'curl/7.77.0',
+                },
+            },
+        };
+
+        for (const platform of ['Clash', 'Mihomo', 'Stash', 'Shadowrocket']) {
+            const external = loadProducedYaml(platform, proxy);
+            const h2Opts = external.proxies[0]['h2-opts'];
+
+            expect(h2Opts).to.deep.equal({
+                host: ['cdn.example.com', 'alt.example.com'],
+                headers: {
+                    'User-Agent': 'curl/7.77.0',
+                },
+                path: '/',
+            });
+            expect(h2Opts.headers).to.not.have.property('Host');
+            expect(h2Opts.headers).to.not.have.property('host');
+        }
     });
 
     it('keeps Mihomo HTTP headers and filters unsupported h2-connect/trusttunnel header variants', function () {
@@ -1529,7 +3269,7 @@ describe('Proxy structured producers', function () {
         });
     });
 
-    it('preserves numeric v2ray-plugin mux values across Clash-family YAML producers', function () {
+    it('preserves numeric v2ray-plugin mux values across non-Mihomo Clash-family YAML producers', function () {
         const buildProxy = (name, mux) => ({
             type: 'ss',
             name,
@@ -1549,12 +3289,7 @@ describe('Proxy structured producers', function () {
             },
         });
 
-        for (const platform of [
-            'Clash',
-            'ClashMeta',
-            'Shadowrocket',
-            'Stash',
-        ]) {
+        for (const platform of ['Clash', 'Shadowrocket', 'Stash']) {
             const internal = produceInternal(platform, [
                 buildProxy(`${platform} Mux On`, 1),
                 buildProxy(`${platform} Mux Off`, 0),
@@ -1578,6 +3313,109 @@ describe('Proxy structured producers', function () {
                 },
             });
         }
+    });
+
+    it('normalizes plugin mux values to booleans for Mihomo-compatible YAML producers', function () {
+        const buildProxy = (name, mux) => ({
+            type: 'ss',
+            name,
+            server: 'ss.example.com',
+            port: 8388,
+            cipher: 'aes-128-gcm',
+            password: 'secret',
+            plugin: 'v2ray-plugin',
+            'plugin-opts': {
+                mode: 'websocket',
+                host: 'cdn.example.com',
+                path: '/socket',
+                tls: true,
+                mux,
+            },
+        });
+        const cases = [
+            ['Number On', 1, true],
+            ['Number Off', 0, false],
+            ['Boolean On', true, true],
+            ['Boolean Off', false, false],
+            ['String True', ' TRUE ', true],
+            ['String False', ' false ', false],
+            ['String One', '1', true],
+            ['String Zero', '0', false],
+        ];
+        const proxies = cases.map(([name, mux]) =>
+            buildProxy(`Mihomo ${name}`, mux),
+        );
+
+        for (const platform of ['Mihomo', 'ClashMeta']) {
+            const internal = produceInternal(platform, proxies);
+            const external = loadProducedYaml(platform, proxies);
+
+            expect(internal, platform).to.have.length(cases.length);
+            expect(external.proxies, platform).to.have.length(cases.length);
+
+            cases.forEach(([name, , expected], index) => {
+                expect(
+                    internal[index]['plugin-opts'].mux,
+                    `${platform} internal ${name}`,
+                ).to.equal(expected);
+                expect(
+                    external.proxies[index]['plugin-opts'].mux,
+                    `${platform} external ${name}`,
+                ).to.equal(expected);
+            });
+        }
+    });
+
+    it('preserves Mihomo shadowsocks gost-plugin options with boolean mux', function () {
+        const proxy = {
+            type: 'ss',
+            name: 'Mihomo Gost Plugin',
+            server: 'ss.example.com',
+            port: 8388,
+            cipher: 'aes-128-gcm',
+            password: 'secret',
+            plugin: 'gost-plugin',
+            'plugin-opts': {
+                mode: 'websocket',
+                tls: true,
+                fingerprint: 'SHA256:TEST',
+                certificate: 'inline-test-client-cert',
+                'private-key': 'inline-test-client-key',
+                'skip-cert-verify': true,
+                host: 'cdn.example.com',
+                path: '/socket',
+                mux: 1,
+                headers: {
+                    custom: 'value',
+                },
+            },
+        };
+
+        const internal = produceInternal('Mihomo', proxy);
+        const external = loadProducedYaml('Mihomo', proxy);
+        const expected = {
+            type: 'ss',
+            name: 'Mihomo Gost Plugin',
+            plugin: 'gost-plugin',
+            'plugin-opts': {
+                mode: 'websocket',
+                tls: true,
+                fingerprint: 'SHA256:TEST',
+                certificate: 'inline-test-client-cert',
+                'private-key': 'inline-test-client-key',
+                'skip-cert-verify': true,
+                host: 'cdn.example.com',
+                path: '/socket',
+                mux: true,
+                headers: {
+                    custom: 'value',
+                },
+            },
+        };
+
+        expect(internal).to.have.length(1);
+        expectSubset(internal[0], expected);
+        expectSubset(external.proxies[0], expected);
     });
 
     it('emits pretty YAML output by default for Clash-style YAML producers', function () {
@@ -1793,6 +3631,183 @@ describe('Proxy structured producers', function () {
             detour: 'control-out',
         });
         expect(tailscale).to.not.have.property('detour');
+    });
+
+    it('emits boolean ssh_server for sing-box Tailscale endpoints', function () {
+        const output = loadProducedJson('sing-box', {
+            type: 'tailscale',
+            name: 'Tailscale SSH Boolean',
+            'ssh-server': true,
+        });
+
+        const tailscale = output.endpoints.find(
+            (endpoint) => endpoint.tag === 'Tailscale SSH Boolean',
+        );
+
+        expect(tailscale.ssh_server).to.equal(true);
+    });
+
+    it('emits object ssh_server for sing-box Tailscale endpoints', function () {
+        const output = loadProducedJson('sing-box', {
+            type: 'tailscale',
+            name: 'Tailscale SSH Object',
+            'ssh-server': {
+                enabled: false,
+                'disable-pty': true,
+                'disable-sftp': true,
+                'disable-forwarding': true,
+            },
+        });
+
+        const tailscale = output.endpoints.find(
+            (endpoint) => endpoint.tag === 'Tailscale SSH Object',
+        );
+
+        expect(tailscale.ssh_server).to.deep.equal({
+            enabled: false,
+            disable_pty: true,
+            disable_sftp: true,
+            disable_forwarding: true,
+        });
+    });
+
+    it('does not emit gecko packet sizes for sing-box when using default values', function () {
+        const output = loadProducedJson('sing-box', {
+            type: 'hysteria2',
+            name: 'Gecko Default Sizes',
+            server: 'hy2.example.com',
+            port: 443,
+            password: 'secret',
+            obfs: 'gecko',
+            'obfs-password': 'mask',
+        });
+
+        const hysteria2 = output.outbounds.find(
+            (outbound) => outbound.tag === 'Gecko Default Sizes',
+        );
+
+        expectSubset(hysteria2, {
+            type: 'hysteria2',
+            obfs: {
+                type: 'gecko',
+                password: 'mask',
+            },
+        });
+        expect(hysteria2.obfs).to.not.have.property('min_packet_size');
+        expect(hysteria2.obfs).to.not.have.property('max_packet_size');
+    });
+
+    it('emits a single gecko packet size for sing-box and relies on the other default', function () {
+        const minOnlyOutput = loadProducedJson('sing-box', {
+            type: 'hysteria2',
+            name: 'Gecko Min Only',
+            server: 'hy2.example.com',
+            port: 443,
+            password: 'secret',
+            obfs: 'gecko',
+            'obfs-password': 'mask',
+            'obfs-min-packet-size': 600,
+        });
+        const maxOnlyOutput = loadProducedJson('sing-box', {
+            type: 'hysteria2',
+            name: 'Gecko Max Only',
+            server: 'hy2.example.com',
+            port: 443,
+            password: 'secret',
+            obfs: 'gecko',
+            'obfs-password': 'mask',
+            'obfs-max-packet-size': 1300,
+        });
+
+        const minOnly = minOnlyOutput.outbounds.find(
+            (outbound) => outbound.tag === 'Gecko Min Only',
+        );
+        const maxOnly = maxOnlyOutput.outbounds.find(
+            (outbound) => outbound.tag === 'Gecko Max Only',
+        );
+
+        expectSubset(minOnly, {
+            obfs: {
+                type: 'gecko',
+                password: 'mask',
+                min_packet_size: 600,
+            },
+        });
+        expect(minOnly.obfs).to.not.have.property('max_packet_size');
+
+        expectSubset(maxOnly, {
+            obfs: {
+                type: 'gecko',
+                password: 'mask',
+                max_packet_size: 1300,
+            },
+        });
+        expect(maxOnly.obfs).to.not.have.property('min_packet_size');
+    });
+
+    it('does not emit invalid gecko packet sizes for sing-box', function () {
+        const { result, errors } = captureErrors(() =>
+            produceInternal('sing-box', [
+                {
+                    type: 'hysteria2',
+                    name: 'Gecko Invalid Decimal',
+                    server: 'hy2.example.com',
+                    port: 443,
+                    password: 'secret',
+                    obfs: 'gecko',
+                    'obfs-password': 'mask',
+                    'obfs-min-packet-size': '600.5',
+                },
+                {
+                    type: 'hysteria2',
+                    name: 'Gecko Invalid Range',
+                    server: 'hy2.example.com',
+                    port: 443,
+                    password: 'secret',
+                    obfs: 'gecko',
+                    'obfs-password': 'mask',
+                    'obfs-min-packet-size': 1300,
+                },
+            ]),
+        );
+
+        expect(errors).to.have.length(2);
+        expect(errors[0]).to.include('Gecko Invalid Decimal');
+        expect(errors[1]).to.include('Gecko Invalid Range');
+        for (const hysteria2 of result) {
+            expect(hysteria2.obfs).to.deep.equal({
+                type: 'gecko',
+                password: 'mask',
+            });
+        }
+    });
+
+    it('clamps oversized gecko max packet size for sing-box and logs a warning', function () {
+        const { result, warnings } = captureWarns(() =>
+            produceInternal('sing-box', {
+                type: 'hysteria2',
+                name: 'Gecko Oversized Max',
+                server: 'hy2.example.com',
+                port: 443,
+                password: 'secret',
+                obfs: 'gecko',
+                'obfs-password': 'mask',
+                'obfs-min-packet-size': 1024,
+                'obfs-max-packet-size': 4096,
+            }),
+        );
+
+        expect(warnings).to.have.length(1);
+        expect(warnings[0]).to.include('Gecko Oversized Max');
+        expect(warnings[0]).to.include('clamped to 2048');
+        expectSubset(result[0], {
+            obfs: {
+                type: 'gecko',
+                password: 'mask',
+                min_packet_size: 1024,
+                max_packet_size: 2048,
+            },
+        });
     });
 
     it('emits WireGuard interface CIDR suffixes for Egern exports', function () {
@@ -2431,6 +4446,303 @@ describe('Proxy structured producers', function () {
                 early_data_header_name: 'Sec-WebSocket-Protocol',
                 max_early_data: 2048,
             },
+        });
+    });
+
+    it('validates sing-box uTLS fingerprints for regular TLS and Reality outbounds', function () {
+        const output = loadProducedJson('sing-box', [
+            {
+                type: 'vmess',
+                name: 'VMess Supported Fingerprint',
+                server: 'vmess-supported.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                alterId: 0,
+                tls: true,
+                'client-fingerprint': 'chrome',
+            },
+            {
+                type: 'vmess',
+                name: 'VMess Unsupported Fingerprint',
+                server: 'vmess-unsupported.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                alterId: 0,
+                tls: true,
+                'client-fingerprint': 'chrome120',
+            },
+            {
+                type: 'vless',
+                name: 'Reality Unsupported Fingerprint',
+                server: 'reality-unsupported.example.com',
+                port: 443,
+                uuid: UUID,
+                tls: true,
+                flow: 'xtls-rprx-vision',
+                'client-fingerprint': 'chrome120',
+                'reality-opts': {
+                    'public-key': 'pubkey',
+                    'short-id': '08',
+                },
+            },
+        ]);
+
+        const supported = output.outbounds.find(
+            (item) => item.tag === 'VMess Supported Fingerprint',
+        );
+        const unsupported = output.outbounds.find(
+            (item) => item.tag === 'VMess Unsupported Fingerprint',
+        );
+        const reality = output.outbounds.find(
+            (item) => item.tag === 'Reality Unsupported Fingerprint',
+        );
+
+        expectSubset(supported, {
+            tls: {
+                utls: {
+                    enabled: true,
+                    fingerprint: 'chrome',
+                },
+            },
+        });
+        expect(unsupported.tls).to.not.have.property('utls');
+        expectSubset(reality, {
+            tls: {
+                reality: {
+                    enabled: true,
+                    public_key: 'pubkey',
+                    short_id: '08',
+                },
+                utls: {
+                    enabled: true,
+                },
+            },
+        });
+        expect(reality.tls.utls).to.not.have.property('fingerprint');
+    });
+
+    it('emits sing-box VMess and VLESS packet protocol options', function () {
+        const output = loadProducedJson('sing-box', [
+            {
+                type: 'vmess',
+                name: 'VMess Packet Options',
+                server: 'vmess-packet.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                alterId: 0,
+                'packet-encoding': 'packetaddr',
+                'global-padding': true,
+                'authenticated-length': false,
+            },
+            {
+                type: 'vless',
+                name: 'VLESS Packet Options',
+                server: 'vless-packet.example.com',
+                port: 443,
+                uuid: UUID,
+                'packet-encoding': 'packetaddr',
+                'global-padding': true,
+                'authenticated-length': false,
+            },
+            {
+                type: 'vmess',
+                name: 'VMess XUDP Packet Options',
+                server: 'vmess-xudp-packet.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                alterId: 0,
+                'packet-encoding': ' XUDP ',
+                'global-padding': false,
+                'authenticated-length': true,
+            },
+            {
+                type: 'vless',
+                name: 'VLESS XUDP Packet Options',
+                server: 'vless-xudp-packet.example.com',
+                port: 443,
+                uuid: UUID,
+                'packet-encoding': 'xudp',
+                'global-padding': false,
+                'authenticated-length': true,
+            },
+            {
+                type: 'vmess',
+                name: 'VMess Invalid Packet Encoding',
+                server: 'vmess-invalid-packet.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                alterId: 0,
+                xudp: true,
+                'packet-encoding': 'invalid',
+                'global-padding': 'yes',
+                'authenticated-length': 1,
+            },
+            {
+                type: 'vless',
+                name: 'VLESS Invalid Packet Encoding',
+                server: 'vless-invalid-packet.example.com',
+                port: 443,
+                uuid: UUID,
+                xudp: true,
+                'packet-encoding': 'invalid',
+                'global-padding': 'yes',
+                'authenticated-length': 1,
+            },
+            {
+                type: 'vmess',
+                name: 'VMess Empty Packet',
+                server: 'vmess-empty.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                alterId: 0,
+                xudp: true,
+                'packet-encoding': '',
+            },
+            {
+                type: 'vless',
+                name: 'VLESS Empty Packet',
+                server: 'vless-empty.example.com',
+                port: 443,
+                uuid: UUID,
+                xudp: true,
+                'packet-encoding': '',
+            },
+            {
+                type: 'vmess',
+                name: 'VMess Legacy XUDP',
+                server: 'vmess-xudp.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                alterId: 0,
+                xudp: true,
+            },
+            {
+                type: 'vless',
+                name: 'VLESS Legacy XUDP',
+                server: 'vless-xudp.example.com',
+                port: 443,
+                uuid: UUID,
+                xudp: true,
+            },
+            {
+                type: 'vmess',
+                name: 'VMess Legacy Packet Addr',
+                server: 'vmess-packet-addr.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                alterId: 0,
+                'packet-addr': true,
+            },
+            {
+                type: 'vless',
+                name: 'VLESS Legacy Packet Addr',
+                server: 'vless-packet-addr.example.com',
+                port: 443,
+                uuid: UUID,
+                'packet-addr': true,
+            },
+            {
+                type: 'vmess',
+                name: 'VMess Legacy XUDP Packet Addr',
+                server: 'vmess-xudp-packet-addr.example.com',
+                port: 443,
+                uuid: UUID,
+                cipher: 'auto',
+                alterId: 0,
+                xudp: true,
+                'packet-addr': true,
+            },
+            {
+                type: 'vless',
+                name: 'VLESS Legacy XUDP Packet Addr',
+                server: 'vless-xudp-packet-addr.example.com',
+                port: 443,
+                uuid: UUID,
+                xudp: true,
+                'packet-addr': true,
+            },
+        ]);
+        const findOutbound = (tag) =>
+            output.outbounds.find((item) => item.tag === tag);
+
+        expectSubset(findOutbound('VMess Packet Options'), {
+            packet_encoding: 'packetaddr',
+            global_padding: true,
+            authenticated_length: false,
+        });
+        expectSubset(findOutbound('VLESS Packet Options'), {
+            packet_encoding: 'packetaddr',
+        });
+        expect(findOutbound('VLESS Packet Options')).to.not.have.property(
+            'global_padding',
+        );
+        expect(findOutbound('VLESS Packet Options')).to.not.have.property(
+            'authenticated_length',
+        );
+        expectSubset(findOutbound('VMess XUDP Packet Options'), {
+            packet_encoding: 'xudp',
+            global_padding: false,
+            authenticated_length: true,
+        });
+        expectSubset(findOutbound('VLESS XUDP Packet Options'), {
+            packet_encoding: 'xudp',
+        });
+        expect(findOutbound('VLESS XUDP Packet Options')).to.not.have.property(
+            'global_padding',
+        );
+        expect(findOutbound('VLESS XUDP Packet Options')).to.not.have.property(
+            'authenticated_length',
+        );
+        for (const tag of ['VMess Empty Packet', 'VLESS Empty Packet']) {
+            expectSubset(findOutbound(tag), {
+                packet_encoding: '',
+            });
+            expect(findOutbound(tag)).to.not.have.property('global_padding');
+            expect(findOutbound(tag)).to.not.have.property(
+                'authenticated_length',
+            );
+        }
+        expect(
+            findOutbound('VMess Invalid Packet Encoding'),
+        ).to.not.have.property('packet_encoding');
+        expectSubset(findOutbound('VMess Invalid Packet Encoding'), {
+            global_padding: true,
+            authenticated_length: true,
+        });
+        expect(
+            findOutbound('VLESS Invalid Packet Encoding'),
+        ).to.not.have.property('packet_encoding');
+        expect(
+            findOutbound('VLESS Invalid Packet Encoding'),
+        ).to.not.have.property('global_padding');
+        expect(
+            findOutbound('VLESS Invalid Packet Encoding'),
+        ).to.not.have.property('authenticated_length');
+        expectSubset(findOutbound('VMess Legacy XUDP'), {
+            packet_encoding: 'xudp',
+        });
+        expectSubset(findOutbound('VLESS Legacy XUDP'), {
+            packet_encoding: 'xudp',
+        });
+        expectSubset(findOutbound('VMess Legacy Packet Addr'), {
+            packet_encoding: 'packetaddr',
+        });
+        expectSubset(findOutbound('VLESS Legacy Packet Addr'), {
+            packet_encoding: 'packetaddr',
+        });
+        expectSubset(findOutbound('VMess Legacy XUDP Packet Addr'), {
+            packet_encoding: 'xudp',
+        });
+        expectSubset(findOutbound('VLESS Legacy XUDP Packet Addr'), {
+            packet_encoding: 'xudp',
         });
     });
 

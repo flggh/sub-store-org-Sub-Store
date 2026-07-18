@@ -20,6 +20,11 @@ import {
 } from '@/restful/errors';
 import Gist from '@/utils/gist';
 import { archiveArtifact } from '@/utils/archive';
+import {
+    normalizeArtifactCron,
+    refreshArtifactCronJobs,
+} from '@/utils/artifact-cron';
+import { normalizeAgePublicKeyConfig } from '@/utils/age';
 
 const ARTIFACT_GIST_PLACEHOLDER_FILENAME = '.sub-store-placeholder';
 const ARTIFACT_GIST_PLACEHOLDER_CONTENT = [
@@ -109,6 +114,7 @@ async function restoreArtifacts(_, res) {
                 }
             });
             $.write(allArtifacts, ARTIFACTS_KEY);
+            refreshArtifactCronJobs();
         } catch (err) {
             $.error(`查找 Sub-Store Gist 时发生错误: ${err.message ?? err}`);
             throw err;
@@ -133,9 +139,16 @@ function getAllArtifacts(req, res) {
 }
 
 function replaceArtifact(req, res) {
-    const allArtifacts = req.body;
-    $.write(allArtifacts, ARTIFACTS_KEY);
-    success(res);
+    try {
+        const allArtifacts = req.body;
+        allArtifacts.forEach(normalizeAgePublicKeyConfig);
+        allArtifacts.forEach(normalizeArtifactCron);
+        $.write(allArtifacts, ARTIFACTS_KEY);
+        refreshArtifactCronJobs();
+        success(res);
+    } catch (error) {
+        failed(res, error);
+    }
 }
 
 async function getArtifact(req, res) {
@@ -178,6 +191,7 @@ function updateArtifact(req, res) {
             ...oldArtifact,
             ...artifact,
         };
+        normalizeAgePublicKeyConfig(newArtifact);
         if (!validateArtifactName(newArtifact.name)) {
             failed(
                 res,
@@ -188,8 +202,15 @@ function updateArtifact(req, res) {
             );
             return;
         }
+        try {
+            normalizeArtifactCron(newArtifact);
+        } catch (error) {
+            failed(res, error);
+            return;
+        }
         updateByName(allArtifacts, oldName, newArtifact);
         $.write(allArtifacts, ARTIFACTS_KEY);
+        refreshArtifactCronJobs();
         success(res, newArtifact);
     } else {
         failed(
@@ -236,6 +257,7 @@ function validateArtifactName(name) {
 }
 
 function createArtifactItem(artifact) {
+    normalizeAgePublicKeyConfig(artifact);
     if (!validateArtifactName(artifact.name)) {
         throw new RequestInvalidError(
             'INVALID_ARTIFACT_NAME',
@@ -244,6 +266,7 @@ function createArtifactItem(artifact) {
     }
 
     $.info(`正在创建远程配置：${artifact.name}`);
+    normalizeArtifactCron(artifact);
     const allArtifacts = $.read(ARTIFACTS_KEY);
     if (findByName(allArtifacts, artifact.name)) {
         throw new RequestInvalidError(
@@ -253,6 +276,7 @@ function createArtifactItem(artifact) {
     }
     insertByPosition(allArtifacts, artifact, getCreateItemPosition());
     $.write(allArtifacts, ARTIFACTS_KEY);
+    refreshArtifactCronJobs();
     return artifact;
 }
 
@@ -269,7 +293,7 @@ async function deleteArtifactItem(name) {
         attempted: false,
         status: 'not_attempted',
     };
-    if (artifact.updated) {
+    if (artifact.url || (artifact.updated && artifact.upload !== false)) {
         const files = {};
         files[encodeURIComponent(artifact.name)] = {
             content: '',
@@ -299,6 +323,7 @@ async function deleteArtifactItem(name) {
     }
     deleteByName(allArtifacts, name);
     $.write(allArtifacts, ARTIFACTS_KEY);
+    refreshArtifactCronJobs();
     return {
         artifact,
         remote,

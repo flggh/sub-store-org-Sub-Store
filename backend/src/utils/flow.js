@@ -8,6 +8,7 @@ import {
     safeDecodeURIComponent,
     parseBooleanStyleArgs,
 } from '@/utils/parse';
+import { runBackendRequestTask } from '@/utils/request-concurrency';
 
 export function getFlowField(headers) {
     const keys = Object.keys(headers);
@@ -121,18 +122,22 @@ export async function getFlowHeaders(
                             : `User-Agent: ${userAgent || ''}`
                     }, Insecure: ${!!insecure}, Proxy: ${proxy}`,
                 );
-                const { headers, body, statusCode } = await http.get({
-                    url,
-                    headers: customHeaders || {
-                        'User-Agent': userAgent,
-                    },
-                    timeout: requestTimeout,
-                    ...(proxy ? { proxy } : {}),
-                    ...(isLoon && proxy ? { node: proxy } : {}),
-                    ...(isQX && proxy ? { opts: { policy: proxy } } : {}),
-                    ...(proxy ? getPolicyDescriptor(proxy) : {}),
-                    ...(insecure ? insecure : {}),
-                });
+                const { headers, body, statusCode } =
+                    await runBackendRequestTask(() =>
+                        http.get({
+                            url,
+                            headers: customHeaders || {
+                                'User-Agent': userAgent,
+                            },
+                            timeout: requestTimeout,
+                            ...(proxy ? { proxy } : {}),
+                            ...(isLoon && proxy ? { node: proxy } : {}),
+                            ...(isQX && proxy ? { opts: { policy: proxy } } : {}),
+                            ...(proxy ? getPolicyDescriptor(proxy) : {}),
+                            ...(insecure ? insecure : {}),
+                        }),
+                        'flow body GET',
+                    );
                 if (statusCode < 200 || statusCode >= 400) {
                     throw new Error(`statusCode: ${statusCode}`);
                 }
@@ -199,52 +204,8 @@ export async function getFlowHeaders(
                             : `User-Agent: ${userAgent || ''}`
                     }, Insecure: ${!!insecure}, Proxy: ${proxy}`,
                 );
-                const { headers } = await http.head({
-                    url: url
-                        .split(/[\r\n]+/)
-                        .map((i) => i.trim())
-                        .filter((i) => i.length)[0],
-                    headers: {
-                        ...(customHeaders || { 'User-Agent': userAgent }),
-                        ...(isStash && proxy
-                            ? {
-                                  'X-Stash-Selected-Proxy':
-                                      encodeURIComponent(proxy),
-                              }
-                            : {}),
-                        ...(isShadowRocket && proxy
-                            ? { 'X-Surge-Policy': proxy }
-                            : {}),
-                    },
-                    timeout: requestTimeout,
-                    ...(proxy ? { proxy } : {}),
-                    ...(isLoon && proxy ? { node: proxy } : {}),
-                    ...(isQX && proxy ? { opts: { policy: proxy } } : {}),
-                    ...(proxy ? getPolicyDescriptor(proxy) : {}),
-                    ...(insecure ? insecure : {}),
-                });
-                flowInfo = getFlowField(headers);
-            } catch (e) {
-                $.error(
-                    `使用 HEAD 方法从响应头获取流量信息失败: ${url}, ${
-                        customHeaders
-                            ? JSON.stringify(customHeaders)
-                            : `User-Agent: ${userAgent || ''}`
-                    }, Insecure: ${!!insecure}, Proxy: ${proxy}: ${
-                        e.message ?? e
-                    }`,
-                );
-            }
-            if (!flowInfo) {
-                try {
-                    $.info(
-                        `使用 GET 方法获取流量信息: ${url}, ${
-                            customHeaders
-                                ? JSON.stringify(customHeaders)
-                                : `User-Agent: ${userAgent || ''}`
-                        }, Insecure: ${!!insecure}, Proxy: ${proxy}`,
-                    );
-                    const { headers } = await http.get({
+                const { headers } = await runBackendRequestTask(() =>
+                    http.head({
                         url: url
                             .split(/[\r\n]+/)
                             .map((i) => i.trim())
@@ -267,19 +228,57 @@ export async function getFlowHeaders(
                         ...(isQX && proxy ? { opts: { policy: proxy } } : {}),
                         ...(proxy ? getPolicyDescriptor(proxy) : {}),
                         ...(insecure ? insecure : {}),
-                    });
-                    flowInfo = getFlowField(headers);
-                } catch (e) {
-                    $.error(
-                        `使用 GET 方法获取流量信息失败: ${url}, ${
-                            customHeaders
-                                ? JSON.stringify(customHeaders)
-                                : `User-Agent: ${userAgent || ''}`
-                        }, Insecure: ${!!insecure}, Proxy: ${proxy}: ${
-                            e.message ?? e
-                        }`,
-                    );
-                }
+                    }),
+                    'flow headers HEAD',
+                );
+                flowInfo = getFlowField(headers);
+            } catch (e) {
+                $.error(
+                    `使用 HEAD 方法从响应头获取流量信息失败: ${url}, ${
+                        customHeaders
+                            ? JSON.stringify(customHeaders)
+                            : `User-Agent: ${userAgent || ''}`
+                    }, Insecure: ${!!insecure}, Proxy: ${proxy}: ${
+                        e.message ?? e
+                    }`,
+                );
+            }
+            if (!flowInfo) {
+                $.info(
+                    `使用 GET 方法获取流量信息: ${url}, ${
+                        customHeaders
+                            ? JSON.stringify(customHeaders)
+                            : `User-Agent: ${userAgent || ''}`
+                    }, Insecure: ${!!insecure}, Proxy: ${proxy}`,
+                );
+                const { headers } = await runBackendRequestTask(() =>
+                    http.get({
+                        url: url
+                            .split(/[\r\n]+/)
+                            .map((i) => i.trim())
+                            .filter((i) => i.length)[0],
+                        headers: {
+                            ...(customHeaders || { 'User-Agent': userAgent }),
+                            ...(isStash && proxy
+                                ? {
+                                      'X-Stash-Selected-Proxy':
+                                          encodeURIComponent(proxy),
+                                  }
+                                : {}),
+                            ...(isShadowRocket && proxy
+                                ? { 'X-Surge-Policy': proxy }
+                                : {}),
+                        },
+                        timeout: requestTimeout,
+                        ...(proxy ? { proxy } : {}),
+                        ...(isLoon && proxy ? { node: proxy } : {}),
+                        ...(isQX && proxy ? { opts: { policy: proxy } } : {}),
+                        ...(proxy ? getPolicyDescriptor(proxy) : {}),
+                        ...(insecure ? insecure : {}),
+                    }),
+                    'flow headers GET',
+                );
+                flowInfo = getFlowField(headers);
             }
         }
         if (flowInfo) {

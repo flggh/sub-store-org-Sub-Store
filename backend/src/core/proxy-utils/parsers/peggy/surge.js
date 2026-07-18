@@ -18,6 +18,7 @@ const grammars = String.raw`
 {
     const proxy = {};
     const obfs = {};
+    const shadowTLS = {};
     const $ = {};
 
     function handleWebsocket() {
@@ -31,8 +32,23 @@ const grammars = String.raw`
         }
     }
     function handleShadowTLS() {
-        if (proxy['shadow-tls-password'] && !proxy['shadow-tls-version']) {
-            proxy['shadow-tls-version'] = 2;
+        if (shadowTLS.password && !shadowTLS.version) {
+            shadowTLS.version = 2;
+        }
+        if (shadowTLS.password) {
+            if (shadowTLS.version < 2) {
+                throw new Error("shadow-tls version " + shadowTLS.version + " is not supported");
+            }
+            proxy.plugin = "shadow-tls";
+            proxy["plugin-opts"] = {
+                host: shadowTLS.host,
+                password: shadowTLS.password,
+                version: shadowTLS.version,
+            };
+            if (proxy.alpn) {
+                $set(proxy, "plugin-opts.alpn", proxy.alpn);
+                delete proxy.alpn;
+            }
         }
     }
     function stripQuotes(value) {
@@ -42,21 +58,10 @@ const grammars = String.raw`
             (quote === '"' || quote === "'") &&
             trimmed[trimmed.length - 1] === quote
         ) {
-            return trimmed.slice(1, -1).replace(/\\(["'\\])/g, "$1");
+            return trimmed.slice(1, -1);
         }
 
-        return trimmed.replace(/\\(["'\\])/g, "$1");
-    }
-    function isEscaped(text, index) {
-        let count = 0;
-        let cursor = index - 1;
-
-        while (cursor >= 0 && text[cursor] === "\\") {
-            count++;
-            cursor--;
-        }
-
-        return count % 2 === 1;
+        return trimmed;
     }
     function readQuotedHeaderKey(text, start) {
         const quote = text[start];
@@ -65,11 +70,6 @@ const grammars = String.raw`
 
         while (index < text.length) {
             const char = text[index];
-            if (char === "\\" && index + 1 < text.length) {
-                hasKey = true;
-                index += 2;
-                continue;
-            }
             if (char === quote) {
                 return hasKey ? index + 1 : -1;
             }
@@ -125,15 +125,35 @@ const grammars = String.raw`
         while (index < text.length && /\s/.test(text[index])) index++;
         return text[index] === ":";
     }
-    function isHeaderValueQuoteEnd(text, index) {
+    function isOptionStart(text, start) {
+        let index = start;
+        while (index < text.length && /\s/.test(text[index])) index++;
+
+        const keyStart = index;
+        while (index < text.length && /[0-9A-Za-z-]/.test(text[index])) index++;
+        if (index === keyStart) return false;
+
+        while (index < text.length && /\s/.test(text[index])) index++;
+        return text[index] === "=";
+    }
+    function isHeaderValueQuoteEnd(text, index, pairSeparator, allowCommaEnd, containerQuote) {
         let cursor = index + 1;
         while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
 
-        return (
-            cursor >= text.length ||
-            text[cursor] === "," ||
-            (text[cursor] === ";" && isHeaderKeyStart(text, cursor + 1))
-        );
+        if (cursor >= text.length) return true;
+        if (allowCommaEnd && text[cursor] === "," && isOptionStart(text, cursor + 1)) {
+            return true;
+        }
+        if (text[cursor] === pairSeparator && isHeaderKeyStart(text, cursor + 1)) {
+            return true;
+        }
+        if (containerQuote && text[cursor] === containerQuote) {
+            let next = cursor + 1;
+            while (next < text.length && /\s/.test(text[next])) next++;
+            return next >= text.length || text[next] === ",";
+        }
+
+        return false;
     }
     function findHeaderSeparator(pair) {
         let quote = "";
@@ -142,10 +162,6 @@ const grammars = String.raw`
             const char = pair[index];
 
             if (quote) {
-                if (char === "\\" && index + 1 < pair.length) {
-                    index++;
-                    continue;
-                }
                 if (char === quote) {
                     quote = "";
                 }
@@ -164,7 +180,7 @@ const grammars = String.raw`
 
         return -1;
     }
-    function readUnquotedHeadersEnd(text, start) {
+    function readUnquotedHeadersEnd(text, start, pairSeparator) {
         let index = start;
         let quote = "";
         let quoteRole = "";
@@ -174,14 +190,10 @@ const grammars = String.raw`
             const char = text[index];
 
             if (quote) {
-                if (char === "\\" && index + 1 < text.length) {
-                    index += 2;
-                    continue;
-                }
                 if (char === quote) {
                     if (
                         quoteRole === "key" ||
-                        isHeaderValueQuoteEnd(text, index)
+                        isHeaderValueQuoteEnd(text, index, pairSeparator, true)
                     ) {
                         quote = "";
                         quoteRole = "";
@@ -204,7 +216,7 @@ const grammars = String.raw`
                 continue;
             }
 
-            if (char === ";" && isHeaderKeyStart(text, index + 1)) {
+            if (char === pairSeparator && isHeaderKeyStart(text, index + 1)) {
                 seenSeparator = false;
                 index++;
                 continue;
@@ -216,24 +228,62 @@ const grammars = String.raw`
 
         return index;
     }
-    function readQuotedHeadersEnd(text, start) {
+    function readQuotedHeadersEnd(text, start, pairSeparator) {
         const quote = text[start];
         let index = start + 1;
+        let innerQuote = "";
+        let quoteRole = "";
+        let seenSeparator = false;
 
         while (index < text.length) {
-            if (text[index] === quote && !isEscaped(text, index)) {
+            const char = text[index];
+
+            if (innerQuote) {
+                if (char === innerQuote) {
+                    if (
+                        quoteRole === "key" ||
+                        isHeaderValueQuoteEnd(text, index, pairSeparator, false, quote)
+                    ) {
+                        innerQuote = "";
+                        quoteRole = "";
+                    }
+                }
+                index++;
+                continue;
+            }
+
+            if (char === quote) {
                 let cursor = index + 1;
                 while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
                 if (cursor >= text.length || text[cursor] === ",") {
                     return index + 1;
                 }
             }
+
+            if (char === '"' || char === "'") {
+                innerQuote = char;
+                quoteRole = seenSeparator ? "value" : "key";
+                index++;
+                continue;
+            }
+
+            if (char === ":" && !seenSeparator) {
+                seenSeparator = true;
+                index++;
+                continue;
+            }
+
+            if (char === pairSeparator && isHeaderKeyStart(text, index + 1)) {
+                seenSeparator = false;
+                index++;
+                continue;
+            }
             index++;
         }
 
         return text.length;
     }
-    function readHeadersEnd(text, start) {
+    function readHeadersEnd(text, start, pairSeparator) {
         let index = start;
         while (index < text.length && /\s/.test(text[index])) index++;
 
@@ -241,12 +291,12 @@ const grammars = String.raw`
             (text[index] === '"' || text[index] === "'") &&
             !startsWithQuotedHeaderKey(text.slice(index))
         ) {
-            return readQuotedHeadersEnd(text, index);
+            return readQuotedHeadersEnd(text, index, pairSeparator);
         }
 
-        return readUnquotedHeadersEnd(text, start);
+        return readUnquotedHeadersEnd(text, start, pairSeparator);
     }
-    function splitHeaders(headers) {
+    function splitHeaders(headers, pairSeparator) {
         const result = [];
         let start = 0;
         let quote = "";
@@ -257,14 +307,10 @@ const grammars = String.raw`
             const char = headers[index];
 
             if (quote) {
-                if (char === "\\" && index + 1 < headers.length) {
-                    index++;
-                    continue;
-                }
                 if (char === quote) {
                     if (
                         quoteRole === "key" ||
-                        isHeaderValueQuoteEnd(headers, index)
+                        isHeaderValueQuoteEnd(headers, index, pairSeparator, false)
                     ) {
                         quote = "";
                         quoteRole = "";
@@ -284,7 +330,7 @@ const grammars = String.raw`
                 continue;
             }
 
-            if (char === ";" && isHeaderKeyStart(headers, index + 1)) {
+            if (char === pairSeparator && isHeaderKeyStart(headers, index + 1)) {
                 result.push(headers.slice(start, index));
                 start = index + 1;
                 seenSeparator = false;
@@ -294,9 +340,9 @@ const grammars = String.raw`
         result.push(headers.slice(start));
         return result;
     }
-    function parseHeaders(headers) {
+    function parseHeaders(headers, pairSeparator) {
         const result = {};
-        splitHeaders(stripOuterHeadersQuotes(headers)).forEach((pair) => {
+        splitHeaders(stripOuterHeadersQuotes(headers), pairSeparator).forEach((pair) => {
             const index = findHeaderSeparator(pair);
             if (index === -1) return;
 
@@ -309,13 +355,25 @@ const grammars = String.raw`
         });
         return result;
     }
+    function normalizeVmessSecurity(security) {
+        const normalized = String(security || "").trim().toLowerCase();
+        const supported = ["aes-128-gcm", "chacha20-ietf-poly1305"];
+        if (!supported.includes(normalized)) return "auto";
+        return normalized === "chacha20-ietf-poly1305" ? "chacha20-poly1305" : normalized;
+    }
+    function parseAlpn(value) {
+        return stripQuotes(value)
+            .split(",")
+            .map((item) => item.trim())
+            .filter((item) => item !== "");
+    }
 }
 
 start = (anytls/shadowsocks/vmess/trojan/h2_connect/https/http/snell/socks5/socks5_tls/tuic/tuic_v5/wireguard/hysteria2/ssh/trust_tunnel/direct) {
     return proxy;
 }
 
-shadowsocks = tag equals "ss" address (method/passwordk/obfs/obfs_host/obfs_uri/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/fast_open/tfo/udp_relay/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/udp_port/others)* {
+shadowsocks = tag equals "ss" address (method/passwordk/obfs/obfs_host/obfs_uri/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/fast_open/tfo/udp_relay/alpn/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/udp_port/others)* {
     proxy.type = "ss";
     // handle obfs
     if (obfs.type == "http" || obfs.type === "tls") {
@@ -326,9 +384,9 @@ shadowsocks = tag equals "ss" address (method/passwordk/obfs/obfs_host/obfs_uri/
     }
     handleShadowTLS();
 }
-vmess = tag equals "vmess" address (vmess_uuid/vmess_aead/ws/ws_path/ws_headers/method/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/tls/sni/tls_fingerprint/tls_verification/fast_open/tfo/udp_relay/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
+vmess = tag equals "vmess" address (vmess_uuid/vmess_aead/ws/ws_path/ws_headers/vmess_method/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/tls/sni/cert_verify_name/alpn/tls_fingerprint/tls_verification/client_cert/fast_open/tfo/udp_relay/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
     proxy.type = "vmess";
-    proxy.cipher = proxy.cipher || "none";
+    proxy.cipher = proxy.cipher || "auto";
     // Surfboard 与 Surge 默认不一致, 不管 Surfboard https://getsurfboard.com/docs/profile-format/proxy/external-proxy/vmess
     if (proxy.aead) {
         proxy.alterId = 0;
@@ -338,17 +396,17 @@ vmess = tag equals "vmess" address (vmess_uuid/vmess_aead/ws/ws_path/ws_headers/
     handleWebsocket();
     handleShadowTLS();
 }
-trojan = tag equals "trojan" address (passwordk/ws/ws_path/ws_headers/tls/sni/tls_fingerprint/tls_verification/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/fast_open/tfo/udp_relay/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
+trojan = tag equals "trojan" address (passwordk/ws/ws_path/ws_headers/tls/sni/cert_verify_name/alpn/tls_fingerprint/tls_verification/client_cert/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/fast_open/tfo/udp_relay/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
     proxy.type = "trojan";
     handleWebsocket();
     handleShadowTLS();
 }
-https = tag equals "https" address (username password)? (usernamek passwordk)? (headers/sni/tls_fingerprint/tls_verification/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/fast_open/tfo/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
+https = tag equals "https" address (username password)? (usernamek passwordk)? (headers/sni/cert_verify_name/alpn/tls_fingerprint/tls_verification/client_cert/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/fast_open/tfo/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
     proxy.type = "http";
     proxy.tls = true;
     handleShadowTLS();
 }
-h2_connect = tag equals "h2-connect" address (username password)? (usernamek passwordk)? (headers/sni/tls_fingerprint/tls_verification/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/fast_open/tfo/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
+h2_connect = tag equals "h2-connect" address (username password)? (usernamek passwordk)? (headers/max_streams/sni/cert_verify_name/alpn/tls_fingerprint/tls_verification/client_cert/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/fast_open/tfo/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
     proxy.type = "h2-connect";
     proxy.tls = true;
     handleShadowTLS();
@@ -361,7 +419,7 @@ ssh = tag equals "ssh" address (username password)? (usernamek passwordk)? (serv
     proxy.type = "ssh";
     handleShadowTLS();
 }
-snell = tag equals "snell" address (snell_version/snell_psk/obfs/obfs_host/obfs_uri/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/fast_open/tfo/udp_relay/reuse/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
+snell = tag equals "snell" address (snell_version/snell_mode/snell_psk/obfs/obfs_host/obfs_uri/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/fast_open/tfo/udp_relay/reuse/alpn/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
     proxy.type = "snell";
     // handle obfs
     if (obfs.type == "http" || obfs.type === "tls") {
@@ -371,11 +429,11 @@ snell = tag equals "snell" address (snell_version/snell_psk/obfs/obfs_host/obfs_
     }
     handleShadowTLS();
 }
-tuic = tag equals "tuic" address (alpn/token/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/tls_fingerprint/tls_verification/sni/fast_open/tfo/ecn/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/port_hopping_interval/others)* {
+tuic = tag equals "tuic" address (alpn/token/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/tls_fingerprint/tls_verification/client_cert/sni/cert_verify_name/fast_open/tfo/ecn/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/port_hopping_interval/others)* {
     proxy.type = "tuic";
     handleShadowTLS();
 }
-tuic_v5 = tag equals "tuic-v5" address (alpn/passwordk/uuidk/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/tls_fingerprint/tls_verification/sni/fast_open/tfo/ecn/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/port_hopping_interval/others)* {
+tuic_v5 = tag equals "tuic-v5" address (alpn/passwordk/uuidk/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/tls_fingerprint/tls_verification/client_cert/sni/cert_verify_name/fast_open/tfo/ecn/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/port_hopping_interval/others)* {
     proxy.type = "tuic";
     proxy.version = 5;
     handleShadowTLS();
@@ -384,7 +442,7 @@ wireguard = tag equals "wireguard" (section_name/no_error_alert/ip_version/under
     proxy.type = "wireguard-surge";
     handleShadowTLS();
 }
-hysteria2 = tag equals "hysteria2" address (no_error_alert/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/sni/tls_verification/passwordk/tls_fingerprint/download_bandwidth/ecn/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/port_hopping_interval/salamander_password/others)* {
+hysteria2 = tag equals "hysteria2" address (no_error_alert/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/sni/cert_verify_name/alpn/tls_verification/client_cert/passwordk/tls_fingerprint/download_bandwidth/ecn/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/port_hopping_interval/salamander_password/gecko_password/others)* {
     proxy.type = "hysteria2";
     handleShadowTLS();
 }
@@ -392,16 +450,16 @@ socks5 = tag equals "socks5" address (username password)? (usernamek passwordk)?
     proxy.type = "socks5";
     handleShadowTLS();
 }
-socks5_tls = tag equals "socks5-tls" address (username password)? (usernamek passwordk)? (udp_relay/no_error_alert/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/sni/tls_fingerprint/tls_verification/fast_open/tfo/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
+socks5_tls = tag equals "socks5-tls" address (username password)? (usernamek passwordk)? (udp_relay/no_error_alert/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/sni/cert_verify_name/alpn/tls_fingerprint/tls_verification/client_cert/fast_open/tfo/shadow_tls_version/shadow_tls_sni/shadow_tls_password/block_quic/others)* {
     proxy.type = "socks5";
     proxy.tls = true;
     handleShadowTLS();
 }
-anytls = tag equals "anytls" address (passwordk/reuse/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/tls_fingerprint/tls_verification/sni/fast_open/tfo/block_quic/others)* {
+anytls = tag equals "anytls" address (passwordk/reuse/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/tls_fingerprint/tls_verification/client_cert/sni/cert_verify_name/alpn/fast_open/tfo/block_quic/others)* {
     proxy.type = "anytls";
     proxy.tls = true;
 }
-trust_tunnel = tag equals "trust-tunnel" address (usernamek/passwordk/headers/reuse/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/tls_fingerprint/tls_verification/sni/fast_open/tfo/block_quic/others)* {
+trust_tunnel = tag equals "trust-tunnel" address (usernamek/passwordk/headers/max_streams/reuse/ip_version/underlying_proxy/tos/allow_other_interface/interface/test_url/test_udp/test_timeout/hybrid/no_error_alert/tls_fingerprint/tls_verification/client_cert/sni/cert_verify_name/alpn/fast_open/tfo/block_quic/others)* {
     proxy.type = "trusttunnel";
     proxy.tls = true;
 }
@@ -478,11 +536,19 @@ sni = comma "sni" equals match:[^,]+ {
         proxy.sni = sni;
     }
 }
+cert_verify_name = comma "server-cert-verify-name" equals match:[^,]+ { proxy["name-cert-verify"] = stripQuotes(match.join("")); }
 tls_verification = comma "skip-cert-verify" equals flag:bool { proxy["skip-cert-verify"] = flag; }
 tls_fingerprint = comma "server-cert-fingerprint-sha256" equals tls_fingerprint:$[^,]+ { proxy["tls-fingerprint"] = tls_fingerprint.trim(); }
+client_cert = comma "client-cert" equals match:[^,]+ { proxy["keystore-client-cert"] = stripQuotes(match.join("")); }
 
-snell_psk = comma "psk" equals match:[^,]+ { proxy.psk = match.join(""); }
+snell_psk = comma "psk" equals match:[^,]+ { proxy.psk = match.join("").replace(/^"(.*?)"$/, '$1').replace(/^'(.*?)'$/, '$1'); }
 snell_version = comma "version" equals match:$[0-9]+ { proxy.version = parseInt(match.trim()); }
+snell_mode = comma "mode" equals match:[^,]+ {
+    const mode = stripQuotes(match.join("")).trim();
+    if (["default", "unshaped", "unsafe-raw"].includes(mode)) {
+        proxy.mode = mode;
+    }
+}
 
 usernamek = comma "username" equals match:[^,]+ { proxy.username = match.join("").replace(/^"(.*?)"$/, '$1').replace(/^'(.*?)'$/, '$1'); }
 passwordk = comma "password" equals match:[^,]+ { proxy.password = match.join("").replace(/^"(.*?)"$/, '$1').replace(/^'(.*?)'$/, '$1'); }
@@ -492,27 +558,29 @@ vmess_aead = comma "vmess-aead" equals flag:bool { proxy.aead = flag; }
 method = comma "encrypt-method" equals cipher:cipher {
     proxy.cipher = cipher;
 }
+vmess_method = comma "encrypt-method" equals cipher:$[^,]+ {
+    proxy.cipher = normalizeVmessSecurity(cipher);
+}
 cipher = ("aes-128-cfb"/"aes-128-ctr"/"aes-128-gcm"/"aes-192-cfb"/"aes-192-ctr"/"aes-192-gcm"/"aes-256-cfb"/"aes-256-ctr"/"aes-256-gcm"/"bf-cfb"/"camellia-128-cfb"/"camellia-192-cfb"/"camellia-256-cfb"/"cast5-cfb"/"chacha20-ietf-poly1305"/"chacha20-ietf"/"chacha20-poly1305"/"chacha20"/"des-cfb"/"idea-cfb"/"none"/"rc2-cfb"/"rc4-md5"/"rc4"/"salsa20"/"seed-cfb"/"xchacha20-ietf-poly1305"/"2022-blake3-aes-128-gcm"/"2022-blake3-aes-256-gcm");
 
 ws = comma "ws" equals flag:bool { obfs.type = "ws"; }
-ws_headers = comma "ws-headers" equals headers:$[^,]+ {
-    const pairs = headers.split("|");
-    const result = {};
-    pairs.forEach(pair => {
-        const [key, value] = pair.trim().split(":");
-        result[key.trim()] = value.trim().replace(/^"(.*?)"$/, '$1').replace(/^'(.*?)'$/, '$1');
-    })
-    obfs["ws-headers"] = result;
-}
-ws_path = comma "ws-path" equals path:uri { obfs.path = path.trim().replace(/^"(.*?)"$/, '$1').replace(/^'(.*?)'$/, '$1'); }
-headers = comma "headers" equals & {
+ws_headers = comma "ws-headers" equals & {
     const start = peg$currPos;
-    const index = readHeadersEnd(input, start);
+    const index = readHeadersEnd(input, start, "|");
 
     $.headers = input.substring(start, index);
     peg$currPos = index;
     return $.headers.trim().length > 0;
-} { proxy.headers = parseHeaders($.headers); }
+} { obfs["ws-headers"] = parseHeaders($.headers, "|"); }
+ws_path = comma "ws-path" equals path:uri { obfs.path = path.trim().replace(/^"(.*?)"$/, '$1').replace(/^'(.*?)'$/, '$1'); }
+headers = comma "headers" equals & {
+    const start = peg$currPos;
+    const index = readHeadersEnd(input, start, ";");
+
+    $.headers = input.substring(start, index);
+    peg$currPos = index;
+    return $.headers.trim().length > 0;
+} { proxy.headers = parseHeaders($.headers, ";"); }
 
 obfs = comma "obfs" equals type:("http"/"tls") { obfs.type = type; }
 obfs_host = comma "obfs-host" equals match:[^,]+ { obfs.host = match.join("").replace(/^"(.*)"$/, '$1'); };
@@ -532,22 +600,29 @@ download_bandwidth = comma "download-bandwidth" equals match:[^,]+ { proxy.down 
 test_url = comma "test-url" equals match:[^,]+ { proxy["test-url"] = match.join(""); }
 test_udp = comma "test-udp" equals match:[^,]+ { proxy["test-udp"] = match.join(""); }
 test_timeout = comma "test-timeout" equals match:$[0-9]+ { proxy["test-timeout"] = parseInt(match.trim()); }
+max_streams = comma "max-streams" equals match:quoted_integer { proxy["max-streams"] = match; }
+quoted_integer = '"' match:$[0-9]+ '"' { return parseInt(match.trim()); } / "'" match:$[0-9]+ "'" { return parseInt(match.trim()); } / match:$[0-9]+ { return parseInt(match.trim()); }
 tos = comma "tos" equals match:$[0-9]+ { proxy.tos = parseInt(match.trim()); }
 interface = comma "interface" equals match:[^,]+ { proxy.interface = match.join(""); }
 allow_other_interface = comma "allow-other-interface" equals flag:bool { proxy["allow-other-interface"] = flag; }
 hybrid = comma "hybrid" equals flag:bool { proxy.hybrid = flag; }
 idle_timeout = comma "idle-timeout" equals match:$[0-9]+ { proxy["idle-timeout"] = parseInt(match.trim()); }
-private_key = comma "private-key" equals match:[^,]+ { proxy["keystore-private-key"] = match.join("").replace(/^"(.*)"$/, '$1'); }
+private_key = comma "private-key" equals match:[^,]+ { proxy["keystore-private-key"] = stripQuotes(match.join("")); }
 server_fingerprint = comma "server-fingerprint" equals match:[^,]+ { proxy["server-fingerprint"] = match.join("").replace(/^"(.*)"$/, '$1'); }
 block_quic = comma "block-quic" equals match:[^,]+ { proxy["block-quic"] = match.join(""); }
 udp_port = comma "udp-port" equals match:$[0-9]+ { proxy["udp-port"] = parseInt(match.trim()); }
-shadow_tls_version = comma "shadow-tls-version" equals match:$[0-9]+ { proxy["shadow-tls-version"] = parseInt(match.trim()); }
-shadow_tls_sni = comma "shadow-tls-sni" equals match:[^,]+ { proxy["shadow-tls-sni"] = match.join(""); }
-shadow_tls_password = comma "shadow-tls-password" equals match:[^,]+ { proxy["shadow-tls-password"] = match.join("").replace(/^"(.*?)"$/, '$1').replace(/^'(.*?)'$/, '$1'); }
+shadow_tls_version = comma "shadow-tls-version" equals match:$[0-9]+ { shadowTLS.version = parseInt(match.trim()); }
+shadow_tls_sni = comma "shadow-tls-sni" equals match:[^,]+ { shadowTLS.host = match.join(""); }
+shadow_tls_password = comma "shadow-tls-password" equals match:[^,]+ { shadowTLS.password = match.join("").replace(/^"(.*?)"$/, '$1').replace(/^'(.*?)'$/, '$1'); }
 token = comma "token" equals match:[^,]+ { proxy.token = match.join(""); }
-alpn = comma "alpn" equals match:[^,]+ { proxy.alpn = match.join(""); }
+alpn = comma "alpn" equals match:quoted_value {
+    const values = parseAlpn(match);
+    if (values.length > 0) proxy.alpn = values;
+}
+quoted_value = '"' match:$[^"]* '"' { return match; } / "'" match:$[^']* "'" { return match; } / match:$[^,]+ { return match; }
 uuidk = comma "uuid" equals match:[^,]+ { proxy.uuid = match.join(""); }
 salamander_password = comma "salamander-password" equals match:[^,]+ { proxy['obfs-password'] = match.join("").replace(/^"(.*?)"$/, '$1').replace(/^'(.*?)'$/, '$1'); proxy.obfs = 'salamander'; }
+gecko_password = comma "gecko-password" equals match:[^,]+ { proxy['obfs-password'] = match.join("").replace(/^"(.*?)"$/, '$1').replace(/^'(.*?)'$/, '$1'); proxy.obfs = 'gecko'; }
 
 tag = match:[^=,]* { proxy.name = match.join("").trim(); }
 comma = _ "," _

@@ -1,6 +1,7 @@
 import _ from 'lodash';
 import YAML from '@/utils/yaml';
 import { isIPv4, isIPv6 } from '@/utils';
+import { normalizeClashYaml } from '@/core/proxy-utils/preprocessors';
 
 export class Result {
     constructor(proxy) {
@@ -53,6 +54,10 @@ export function normalizePluginMuxValue(mux) {
         if (/^\d+$/.test(normalized)) return parseInt(normalized, 10);
     }
     return mux;
+}
+
+export function normalizePluginMuxBooleanValue(mux) {
+    return Boolean(normalizePluginMuxValue(mux));
 }
 
 export function supportsShadowsocksV2rayPluginMode(proxy, supportedModes) {
@@ -138,7 +143,9 @@ export function getWireGuardAddressWithCIDR(proxy = {}, family = 'ipv4') {
         proxy[config.cidrKey],
         config.defaultCIDR,
     );
-    return `${parsed.address}/${normalizedCIDR ?? parsed.cidr ?? config.defaultCIDR}`;
+    return `${parsed.address}/${
+        normalizedCIDR ?? parsed.cidr ?? config.defaultCIDR
+    }`;
 }
 
 
@@ -157,12 +164,14 @@ export function produceProxyListOutput(list, type, opts = {}) {
             list.map((proxy) => '  - ' + JSON.stringify(proxy) + '\n').join('');
     }
 
-    return YAML.safeDump(
-        {
-            proxies: list,
-        },
-        {
-            lineWidth: -1,
-        },
+    return normalizeClashYaml(
+        YAML.safeDump(
+            {
+                proxies: list,
+            },
+            {
+                lineWidth: -1,
+            },
+        ),
     );
 }
