@@ -145,6 +145,7 @@ async function processFn(
     source,
     $options,
     raw,
+    executionContext = {},
 ) {
     let context = {};
     if (raw !== undefined) {
@@ -184,7 +185,10 @@ async function processFn(
         let script;
         let $arguments = {};
         if (item.type.indexOf('Script') !== -1) {
-            ({ script, $arguments } = await loadScriptItem(item));
+            ({ script, $arguments } = await loadScriptItem(
+                item,
+                executionContext,
+            ));
         }
 
         if (!PROXY_PROCESSORS[item.type]) {
@@ -207,7 +211,10 @@ async function processFn(
                 context,
             );
         } else {
-            processor = PROXY_PROCESSORS[item.type](item.args || {});
+            processor = PROXY_PROCESSORS[item.type](
+                item.args || {},
+                executionContext,
+            );
         }
         proxies = await ApplyProcessor(processor, proxies);
     }
@@ -220,6 +227,7 @@ async function processResponseFn(
     targetPlatform,
     source,
     $options,
+    executionContext = {},
 ) {
     let context = {};
     let output = normalizeResponse(response);
@@ -244,7 +252,10 @@ async function processResponseFn(
             continue;
         }
 
-        const { script, $arguments } = await loadScriptItem(item);
+        const { script, $arguments } = await loadScriptItem(
+            item,
+            executionContext,
+        );
         $.log(
             `Applying "${item.type}" with arguments:\n >>> ${
                 JSON.stringify(item.args, null, 2) || 'None'
@@ -265,7 +276,7 @@ async function processResponseFn(
     return output;
 }
 
-async function loadScriptItem(item) {
+async function loadScriptItem(item, executionContext = {}) {
     let script;
     let $arguments = {};
     const { mode, content } = item.args || {};
@@ -320,6 +331,7 @@ async function loadScriptItem(item) {
                     script = await produceArtifact({
                         type: 'file',
                         name,
+                        noFlow: executionContext.noFlow,
                     });
                 }
             } catch (err) {
@@ -342,7 +354,17 @@ async function loadScriptItem(item) {
         } else {
             // if this is a remote script, download it
             try {
-                script = await download(url);
+                script = await download(
+                    url,
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    { noFlow: executionContext.noFlow },
+                );
                 // $.info(`Script loaded: >>>\n ${script}`);
             } catch (err) {
                 $.error(
@@ -577,6 +599,7 @@ function produce(proxies, targetPlatform, type, opts = {}) {
                             Base64.encode(
                                 JSON.stringify({
                                     ...opts._merged.config,
+                                    ...(opts._merged.configOverride || {}),
                                     'mixed-port': opts.localPort,
                                 }),
                             ),
@@ -720,6 +743,33 @@ function formatTransportPath(path) {
 }
 
 function lastParse(proxy) {
+    // normalize keys to lowercase for all -opts keys and their subkeys
+    // 通常来说够用了, 在重构之前暂不考虑引入更复杂的逻辑
+    const hasOwn = (value, key) =>
+        Object.prototype.hasOwnProperty.call(value, key);
+    const normalizeOpts = (value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+        for (const key of Object.keys(value)) {
+            const normalizedKey = key.toLowerCase();
+            if (key !== normalizedKey) {
+                if (!hasOwn(value, normalizedKey)) {
+                    value[normalizedKey] = value[key];
+                }
+                delete value[key];
+            }
+        }
+    };
+    for (const key of Object.keys(proxy)) {
+        const normalizedKey = key.toLowerCase();
+        if (!normalizedKey.endsWith('-opts')) continue;
+        if (key !== normalizedKey) {
+            if (!hasOwn(proxy, normalizedKey)) {
+                proxy[normalizedKey] = proxy[key];
+            }
+            delete proxy[key];
+        }
+        normalizeOpts(proxy[normalizedKey]);
+    }
     proxy.udp = ![false, 0, '0', 'false', 'off'].includes(
         typeof proxy.udp === 'string' ? proxy.udp.toLowerCase() : proxy.udp,
     );
@@ -783,6 +833,18 @@ function lastParse(proxy) {
             .replace(/\]$/, '');
     }
     if (
+        ['vmess', 'vless', 'trojan', 'anytls'].includes(proxy.type) &&
+        proxy['shadow-tls-opts']
+    ) {
+        proxy.plugin = 'shadow-tls';
+        proxy['plugin-opts'] = {
+            host: proxy.sni,
+            password: proxy['shadow-tls-opts'].password,
+            version: proxy['shadow-tls-opts'].version,
+        };
+        delete proxy['shadow-tls-opts'];
+    }
+    if (
         proxy.type === 'snell' &&
         proxy['obfs-opts']?.mode === 'shadow-tls' &&
         !proxy.plugin
@@ -801,6 +863,32 @@ function lastParse(proxy) {
             proxy['plugin-opts'].alpn = proxy.alpn;
         }
         delete proxy.alpn;
+    }
+    const xhttpDownloadSettings =
+        proxy.type === 'vless' && proxy.network === 'xhttp'
+            ? proxy['xhttp-opts']?.['download-settings']
+            : undefined;
+    if (xhttpDownloadSettings?.['shadow-tls-opts']) {
+        xhttpDownloadSettings.plugin = 'shadow-tls';
+        xhttpDownloadSettings['plugin-opts'] = {
+            host: xhttpDownloadSettings.servername,
+            password: xhttpDownloadSettings['shadow-tls-opts'].password,
+            version: xhttpDownloadSettings['shadow-tls-opts'].version,
+        };
+        delete xhttpDownloadSettings['shadow-tls-opts'];
+    }
+    if (
+        xhttpDownloadSettings?.plugin === 'shadow-tls' &&
+        xhttpDownloadSettings['plugin-opts']
+    ) {
+        if (
+            xhttpDownloadSettings.alpn &&
+            !xhttpDownloadSettings['plugin-opts'].alpn
+        ) {
+            xhttpDownloadSettings['plugin-opts'].alpn =
+                xhttpDownloadSettings.alpn;
+        }
+        delete xhttpDownloadSettings.alpn;
     }
     if (proxy.network === 'ws') {
         if (!proxy['ws-opts'] && (proxy['ws-path'] || proxy['ws-headers'])) {

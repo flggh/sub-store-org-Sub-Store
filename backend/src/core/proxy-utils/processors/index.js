@@ -528,12 +528,15 @@ function getMihomoProfileProxies(config) {
     return Array.isArray(config?.proxies) ? config.proxies : [];
 }
 
-function AddProxiesFromSubscriptionOperator({
-    sourceType = 'subscription',
-    sourceName,
-    includeUnsupportedProxy,
-    position = 'replace',
-} = {}) {
+function AddProxiesFromSubscriptionOperator(
+    {
+        sourceType = 'subscription',
+        sourceName,
+        includeUnsupportedProxy,
+        position = 'replace',
+    } = {},
+    executionContext = {},
+) {
     const apply = async (input) => {
         if (!isMihomoConfigFile(input?.$file)) return input;
 
@@ -548,6 +551,7 @@ function AddProxiesFromSubscriptionOperator({
                 'delete-underscore-fields': true,
                 'include-unsupported-proxy': includeUnsupportedProxy,
             },
+            noFlow: executionContext.noFlow,
         });
 
         switch (position) {

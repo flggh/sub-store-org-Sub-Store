@@ -2560,6 +2560,7 @@ function Clash_All() {
         }
         if (
             ![
+                'zerotier',
                 'shadowquic',
                 'gost-relay',
                 'openvpn',
