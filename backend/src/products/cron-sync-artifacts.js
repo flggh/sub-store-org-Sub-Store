@@ -45,7 +45,7 @@ import {
             await produceArtifacts(col_names, 'collection');
     } else {
         const settings = $.read(SETTINGS_KEY) || {};
-        const artifacts = $.read(ARTIFACTS_KEY) || [];
+        const artifacts = $.read(ARTIFACTS_KEY);
         if (!artifacts || artifacts.length === 0) return;
 
         const policy = resolveCronArtifactSyncPolicy({ artifacts, settings });

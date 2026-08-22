@@ -432,7 +432,7 @@ export default function Egern_Producer() {
                             };
                         } else if (proxy.network === 'http') {
                             proxy.transport = {
-                                http: {
+                                http1: {
                                     method: proxy['http-opts']?.method,
                                     path: Array.isArray(
                                         proxy['http-opts']?.path,
@@ -715,7 +715,7 @@ function hasHeaders(proxy) {
 }
 
 function getTfo(proxy) {
-    return proxy.tfo ?? proxy['fast-open'];
+    return !!(proxy.tfo ?? proxy['fast-open']);
 }
 
 function getUdpRelay(proxy) {

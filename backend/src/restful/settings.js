@@ -101,7 +101,7 @@ async function getSettings(req, res) {
 
 async function updateSettings(req, res) {
     try {
-        const settings = $.read(SETTINGS_KEY);
+        const settings = $.read(SETTINGS_KEY) || {};
         const newSettings = {
             ...settings,
             ...req.body,
