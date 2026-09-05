@@ -106,7 +106,7 @@ async function compareSub(req, res) {
                                 sub.proxy,
                                 undefined,
                                 undefined,
-                                undefined,
+                                sub.noCache,
                                 true,
                                 { returnRaw: true },
                             );
@@ -272,7 +272,7 @@ async function compareCollection(req, res) {
                                             sub.proxy,
                                             undefined,
                                             undefined,
-                                            undefined,
+                                            sub.noCache,
                                             true,
                                             { returnRaw: true },
                                         );
