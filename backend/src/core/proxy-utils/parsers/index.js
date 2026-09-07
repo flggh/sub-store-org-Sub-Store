@@ -605,7 +605,9 @@ function URI_SSR() {
                 ? Base64.decode(other_params.remarks)
                 : proxy.server,
             'protocol-param': getIfNotBlank(
-                Base64.decode(other_params.protoparam || '').replace(/\s/g, ''),
+                Base64.decode(
+                    other_params.protoparam || other_params.protocolparam || '',
+                ).replace(/\s/g, ''),
             ),
             'obfs-param': getIfNotBlank(
                 Base64.decode(other_params.obfsparam || '').replace(/\s/g, ''),

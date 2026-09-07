@@ -1,5 +1,7 @@
 /* eslint-disable no-undef */
 import { installConsoleLogCapture } from '@/utils/debug-logs';
+import getChildProcess from '@/runtime/child-process';
+import getFs from '@/runtime/fs';
 
 const isQX = typeof $task !== 'undefined';
 const isLoon = typeof $loon !== 'undefined';
@@ -94,7 +96,7 @@ export class OpenAPI {
         }
         this.node = (() => {
             if (isNode) {
-                const fs = eval("require('fs')");
+                const fs = getFs();
 
                 return {
                     fs,
@@ -346,7 +348,7 @@ export class OpenAPI {
                             );
                         });
                 } else {
-                    const { execFile } = eval(`require("child_process")`);
+                    const { execFile } = getChildProcess();
                     execFile(
                         'shoutrrr',
                         [

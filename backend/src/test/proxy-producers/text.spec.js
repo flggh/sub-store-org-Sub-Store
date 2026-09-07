@@ -2268,6 +2268,36 @@ describe('Proxy text producers', function () {
         expect(defaults).to.not.include('ipv6-cidr=');
     });
 
+    it('normalizes SSR protocol parameter aliases and preserves them on URI round-trips', function () {
+        const canonical = Base64.encode('user:pass');
+        const legacy = Base64.encode('legacy:pass');
+
+        for (const [query, expected] of [
+            [`protoparam=${canonical}`, 'user:pass'],
+            [`protocolparam=${legacy}`, 'legacy:pass'],
+            [`protoparam=${canonical}&protocolparam=${legacy}`, 'user:pass'],
+            [`protocolparam=${legacy}&protoparam=${canonical}`, 'user:pass'],
+            [`protoparam=&protocolparam=${legacy}`, 'legacy:pass'],
+        ]) {
+            const input = `ssr://${Base64.encode(
+                `ssr.example.com:8899:auth_aes128_md5:aes-256-cfb:plain:${Base64.encode(
+                    'secret',
+                )}/?remarks=${Base64.encode('SSR')}&${query}`,
+            )}`;
+            const [proxy] = ProxyUtils.parse(input);
+            expect(proxy['protocol-param'], query).to.equal(expected);
+
+            const output = produceExternal('URI', proxy);
+            const decoded = Base64.decode(output.slice(6));
+            expect(decoded, query).to.include(
+                `&protoparam=${Base64.encode(expected)}`,
+            );
+            expect(decoded, query).not.to.include('&protocolparam=');
+            const [reparsed] = ProxyUtils.parse(output);
+            expect(reparsed['protocol-param'], query).to.equal(expected);
+        }
+    });
+
     it('produces URI shadowsocks links with v2ray-plugin mux and tls flags', function () {
         const plugin = encodeURIComponent(
             'v2ray-plugin;obfs=websocket;mode=websocket;obfs-host=cdn.example.com;host=cdn.example.com;path=/socket;tls;sni=sni.example.com;skip-cert-verify=true;mux=0',
