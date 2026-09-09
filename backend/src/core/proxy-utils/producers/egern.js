@@ -71,7 +71,7 @@ export default function Egern_Producer() {
                             proxy.network) ||
                             !isEgernGrpcGun(proxy))) ||
                     (proxy.type === 'trojan' &&
-                        !['http', 'ws', 'tcp', 'h2'].includes(proxy.network) &&
+                        !['http', 'ws', 'tcp'].includes(proxy.network) &&
                         proxy.network) ||
                     (proxy.type === 'vless' &&
                         ((!['h2', 'http', 'ws', 'tcp', 'grpc'].includes(
@@ -161,7 +161,6 @@ export default function Egern_Producer() {
                                   }
                                 : {}),
                             tfo: getTfo(proxy),
-                            next_hop: proxy.next_hop,
                             sni: proxy.sni,
                             skip_tls_verify: proxy['skip-cert-verify'],
                             reality: getReality(proxy),
@@ -176,7 +175,6 @@ export default function Egern_Producer() {
                             password: proxy.password,
                             tfo: getTfo(proxy),
                             udp_relay: getUdpRelay(proxy),
-                            next_hop: proxy.next_hop,
                             ...(proxy.tls
                                 ? {
                                       sni: proxy.sni,
@@ -199,7 +197,6 @@ export default function Egern_Producer() {
                             password: proxy.password,
                             tfo: getTfo(proxy),
                             udp_relay: getUdpRelay(proxy),
-                            next_hop: proxy.next_hop,
                         };
                         if (isPresent(original, 'plugin')) {
                             if (original.plugin === 'obfs') {
@@ -246,7 +243,6 @@ export default function Egern_Producer() {
                                 : {}),
                             tfo: getTfo(proxy),
                             udp_relay: getUdpRelay(proxy),
-                            next_hop: proxy.next_hop,
                             sni: proxy.sni,
                             skip_tls_verify: proxy['skip-cert-verify'],
                             port_hopping: proxy.ports,
@@ -292,26 +288,10 @@ export default function Egern_Producer() {
                                         Host: Array.isArray(
                                             proxy['http-opts']?.headers?.Host,
                                         )
-                                            ? proxy['http-opts']?.headers?.Host[0]
+                                            ? proxy['http-opts']?.headers
+                                                  ?.Host[0]
                                             : proxy['http-opts']?.headers?.Host,
                                     },
-                                    skip_tls_verify: proxy['skip-cert-verify'],
-                                },
-                            };
-                        } else if (proxy.network === 'h2') {
-                            proxy.transport = {
-                                http2: {
-                                    path: Array.isArray(proxy['h2-opts']?.path)
-                                        ? proxy['h2-opts']?.path[0]
-                                        : proxy['h2-opts']?.path,
-                                    headers: {
-                                        Host: Array.isArray(
-                                            proxy['h2-opts']?.headers?.host,
-                                        )
-                                            ? proxy['h2-opts']?.headers?.host[0]
-                                            : proxy['h2-opts']?.headers?.host,
-                                    },
-                                    sni: proxy.sni,
                                     skip_tls_verify: proxy['skip-cert-verify'],
                                 },
                             };
@@ -324,7 +304,6 @@ export default function Egern_Producer() {
                             password: proxy.password,
                             tfo: getTfo(proxy),
                             udp_relay: getUdpRelay(proxy),
-                            next_hop: proxy.next_hop,
                             sni: proxy.sni,
                             skip_tls_verify: proxy['skip-cert-verify'],
                             reality: getReality(proxy),
@@ -340,7 +319,6 @@ export default function Egern_Producer() {
                             password: proxy.password,
                             tfo: getTfo(proxy),
                             udp_relay: getUdpRelay(proxy),
-                            next_hop: proxy.next_hop,
                             sni: proxy.sni,
                             skip_tls_verify: proxy['skip-cert-verify'],
                             reality: getReality(proxy),
@@ -427,7 +405,6 @@ export default function Egern_Producer() {
                             tfo: getTfo(proxy),
                             legacy,
                             udp_relay: getUdpRelay(proxy),
-                            next_hop: proxy.next_hop,
                             transport: proxy.transport,
                         };
                     } else if (proxy.type === 'vless') {
@@ -504,7 +481,6 @@ export default function Egern_Producer() {
                             security: proxy.cipher,
                             tfo: getTfo(proxy),
                             udp_relay: getUdpRelay(proxy),
-                            next_hop: proxy.next_hop,
                             transport: proxy.transport,
                             flow,
                         };

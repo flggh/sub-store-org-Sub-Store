@@ -417,41 +417,23 @@ export default class Gist {
 
     async download(filename) {
         const gist = await this.locate();
-        if (gist?.id) {
-            try {
-                if (this.syncPlatform === 'gitlab') {
-                    const snippet = await this.http
-                        .get(`/snippets/${gist.id}`)
-                        .then((resp) => JSON.parse(resp.body));
-                    const file = snippet.files?.find(
-                        (f) => f.path === filename,
-                    );
-                    if (!file?.raw_url) {
-                        return Promise.reject(
-                            `找不到文件 ${filename}`,
-                        );
-                    }
-                    return await this.http
-                        .get(file.raw_url)
-                        .then((resp) => resp.body);
-                } else {
-                    const { files } = await this.http
-                        .get(`/gists/${gist.id}`)
-                        .then((resp) => JSON.parse(resp.body));
-                    const file = files?.[filename];
-                    if (!file?.raw_url) {
-                        return Promise.reject(`找不到文件 ${filename}`);
-                    }
-                    const url = file.raw_url;
-                    return await this.http
-                        .get(url)
-                        .then((resp) => resp.body);
-                }
-            } catch (err) {
-                return Promise.reject(err);
-            }
-        } else {
-            return Promise.reject(`找不到 Sub-Store Gist (${this.key})`);
+        if (!gist?.id) {
+            throw new Error(`找不到 Sub-Store Gist (${this.key})`);
         }
+
+        const isGitLab = this.syncPlatform === 'gitlab';
+        const { body } = await this.http.get(
+            `/${isGitLab ? 'snippets' : 'gists'}/${gist.id}`,
+        );
+        const { files } = JSON.parse(body);
+        const file = isGitLab
+            ? Array.isArray(files) &&
+              files.find((file) => file?.path === filename)
+            : files?.[filename];
+        if (!file?.raw_url) {
+            throw new Error(`找不到文件 ${filename}`);
+        }
+        const response = await this.http.get(file.raw_url);
+        return response.body;
     }
 }

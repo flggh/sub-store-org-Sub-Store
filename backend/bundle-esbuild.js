@@ -53,7 +53,7 @@ function getExternalSpecifiers(metafiles) {
     );
 }
 
-function createRuntimeManifest({ metafiles, content }) {
+function createRuntimeManifest({ metafiles, content, testedNode }) {
     const specifiers = new Set([
         ...getExternalSpecifiers(metafiles),
         ...getRequireSpecifiers(content),
@@ -78,9 +78,7 @@ function createRuntimeManifest({ metafiles, content }) {
         workerThreads: builtins.has('worker_threads'),
         childProcess: builtins.has('child_process'),
         externalBinary: ['shoutrrr'],
-        testedNode: fs
-            .readFileSync(path.join(__dirname, '..', '.node-version'), 'utf8')
-            .trim(),
+        testedNode,
     };
 }
 
@@ -99,6 +97,9 @@ const nodeBuiltinExternalPlugin = {
 };
 
 !(async () => {
+    const testedNode = fs
+        .readFileSync(path.join(__dirname, '..', '.node-version'), 'utf8')
+        .trim();
     const version = JSON.parse(
         fs.readFileSync(path.join(__dirname, 'package.json'), 'utf-8'),
     ).version.trim();
@@ -201,6 +202,7 @@ ${fs.readFileSync(path.join(__dirname, 'dist/sub-store.bundle.js'), {
             createRuntimeManifest({
                 metafiles: [...browserMetafiles, nodeBuild.metafile],
                 content: fs.readFileSync(bundlePath, 'utf8'),
+                testedNode,
             }),
             null,
             2,

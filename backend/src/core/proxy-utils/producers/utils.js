@@ -184,30 +184,24 @@ export function getWireGuardAddressWithCIDR(proxy = {}, family = 'ipv4') {
     }`;
 }
 
-
 export function produceProxyListOutput(list, type, opts = {}) {
     if (type === 'internal') return list;
 
-    const prettyYaml = opts.prettyYaml ?? opts['pretty-yaml'];
-    // 仅当显式传入 false / "false" 时才使用 JSON 行格式
-    const useJson =
-        prettyYaml === false ||
-        prettyYaml === 'false' ||
-        prettyYaml === '0';
-
-    if (useJson) {
-        return 'proxies:\n' +
-            list.map((proxy) => '  - ' + JSON.stringify(proxy) + '\n').join('');
+    if (opts.prettyYaml || opts['pretty-yaml']) {
+        return normalizeClashYaml(
+            YAML.safeDump(
+                {
+                    proxies: list,
+                },
+                {
+                    lineWidth: -1,
+                },
+            ),
+        );
     }
 
-    return normalizeClashYaml(
-        YAML.safeDump(
-            {
-                proxies: list,
-            },
-            {
-                lineWidth: -1,
-            },
-        ),
+    return (
+        'proxies:\n' +
+        list.map((proxy) => '  - ' + JSON.stringify(proxy) + '\n').join('')
     );
 }

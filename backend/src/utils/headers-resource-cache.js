@@ -36,7 +36,7 @@ class ResourceCache {
         Object.entries(this.resourceCache).forEach((entry) => {
             const [id, cached] = entry;
             const shouldDelete =
-                !cached.time || cached.time < now + resolvedTTL;
+                !cached?.time || cached.time < now + resolvedTTL;
             if (shouldDelete && (prefix ? id.startsWith(prefix) : true)) {
                 delete this.resourceCache[id];
                 clear = true;

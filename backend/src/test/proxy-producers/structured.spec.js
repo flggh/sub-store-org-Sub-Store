@@ -980,7 +980,7 @@ describe('Proxy structured producers', function () {
             produceInternal('Mihomo', proxy),
         );
         const { result: external, errors: externalErrors } = captureErrors(() =>
-            loadProducedYaml('Mihomo', proxy, { prettyYaml: false }),
+            loadProducedYaml('Mihomo', proxy),
         );
 
         expect(errors).to.deep.equal([
@@ -2143,7 +2143,7 @@ describe('Proxy structured producers', function () {
         };
 
         const internal = produceInternal('Mihomo', proxy);
-        const external = ProxyUtils.produce([proxy], 'Mihomo', 'external', { prettyYaml: false });
+        const external = ProxyUtils.produce([proxy], 'Mihomo', 'external');
 
         expect(internal).to.have.length(0);
         expect(external.trim()).to.equal('proxies:');
@@ -2656,7 +2656,7 @@ describe('Proxy structured producers', function () {
             produceInternal('Shadowrocket', proxy),
         );
         const { result: external, errors: externalErrors } = captureErrors(() =>
-            loadProducedYaml('Shadowrocket', proxy, { prettyYaml: false }),
+            loadProducedYaml('Shadowrocket', proxy),
         );
 
         expect(errors).to.deep.equal([
@@ -4206,7 +4206,7 @@ describe('Proxy structured producers', function () {
         expectSubset(external.proxies[0], expected);
     });
 
-    it('emits pretty YAML output by default for Clash-style YAML producers', function () {
+    it('keeps legacy single-line proxy output by default for Clash-style YAML producers', function () {
         const proxy = {
             type: 'ss',
             name: 'Legacy YAML',
@@ -4225,11 +4225,11 @@ describe('Proxy structured producers', function () {
         ]) {
             const output = produceExternal(platform, proxy);
 
-            expect(output, platform).to.not.match(/\n {2}- \{/);
+            expect(output, platform).to.match(/\n {2}- \{/);
         }
     });
 
-    it('emits single-line JSON proxy output for Clash-style YAML producers when prettyYaml is disabled', function () {
+    it('emits pretty yaml for Clash-style YAML producers when prettyYaml is enabled', function () {
         const proxy = {
             type: 'ss',
             name: 'Real YAML',
@@ -4247,13 +4247,13 @@ describe('Proxy structured producers', function () {
             'Egern',
         ]) {
             const output = produceExternal(platform, proxy, {
-                prettyYaml: false,
+                prettyYaml: true,
             });
             const external = loadProducedYaml(platform, proxy, {
                 prettyYaml: true,
             });
 
-            expect(output, platform).to.match(/\n {2}- \{/);
+            expect(output, platform).to.not.match(/\n {2}- \{/);
             expect(external.proxies, platform).to.have.length(1);
 
             if (platform === 'Egern') {
@@ -4771,7 +4771,7 @@ describe('Proxy structured producers', function () {
             );
         }
 
-        expect(ProxyUtils.produce([proxy], 'Clash', 'external', { prettyYaml: false })).to.equal(
+        expect(ProxyUtils.produce([proxy], 'Clash', 'external')).to.equal(
             'proxies:\n',
         );
         expect(ProxyUtils.produce([proxy], 'Loon', 'external')).to.equal('');
@@ -4820,7 +4820,7 @@ describe('Proxy structured producers', function () {
         };
 
         expect(produceInternal('Clash', proxy)).to.have.length(0);
-        expect(produceExternal('Clash', proxy, { prettyYaml: false })).to.equal('proxies:\n');
+        expect(produceExternal('Clash', proxy)).to.equal('proxies:\n');
     });
 
     it('still treats canonical shadowsocks tcp tls nodes as unsupported for disallowed targets', function () {

@@ -8,6 +8,7 @@ import {
     parseSafeIntegerValue,
 } from '../transport-path';
 import { normalizeVmessSecurity } from '../vmess-security';
+import { parseHysteria2Bandwidth } from './hysteria2-bandwidth';
 
 const ipVersions = {
     ipv4: 'ipv4_only',
@@ -1053,21 +1054,9 @@ const hysteria2Parser = (proxy = {}) => {
             const range = p.replace(/\s*-\s*/g, ':');
             return range.includes(':') ? range : `${range}:${range}`;
         });
-    // eslint-disable-next-line no-control-regex
-    const reg = new RegExp('^[0-9]+[ \t]*[KMGT]*[Bb]ps$');
-    if (proxy.up) {
-        if (reg.test(`${proxy.up}`) && !`${proxy.up}`.endsWith('Mbps')) {
-            parsedProxy.up = `${proxy.up}`;
-        } else {
-            parsedProxy.up_mbps = parseInt(`${proxy.up}`, 10);
-        }
-    }
-    if (proxy.down) {
-        if (reg.test(`${proxy.down}`) && !`${proxy.down}`.endsWith('Mbps')) {
-            parsedProxy.down = `${proxy.down}`;
-        } else {
-            parsedProxy.down_mbps = parseInt(`${proxy.down}`, 10);
-        }
+    for (const field of ['up', 'down']) {
+        const mbps = parseHysteria2Bandwidth(proxy[field], field);
+        if (mbps !== undefined) parsedProxy[`${field}_mbps`] = mbps;
     }
     if (['salamander', 'gecko'].includes(proxy.obfs))
         parsedProxy.obfs.type = proxy.obfs;

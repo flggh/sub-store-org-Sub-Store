@@ -215,8 +215,8 @@ async function downloadSubscription(req, res) {
     if (includeUnsupportedProxy) {
         $.info(`包含官方/商店版不支持的协议: ${includeUnsupportedProxy}`);
     }
-    if (prettyYaml === 'false' || prettyYaml === false) {
-        $.info(`指定输出 JSON 行格式 (pretty-yaml=false): ${prettyYaml}`);
+    if (prettyYaml) {
+        $.info(`指定输出易读 YAML: ${prettyYaml}`);
     }
     if (mihomoMerge) {
         $.info(`指定合并 mihomo External: ${mihomoMerge}`);
@@ -546,8 +546,8 @@ async function downloadCollection(req, res) {
     if (includeUnsupportedProxy) {
         $.info(`包含官方/商店版不支持的协议: ${includeUnsupportedProxy}`);
     }
-    if (prettyYaml === 'false' || prettyYaml === false) {
-        $.info(`指定输出 JSON 行格式 (pretty-yaml=false): ${prettyYaml}`);
+    if (prettyYaml) {
+        $.info(`指定输出易读 YAML: ${prettyYaml}`);
     }
     if (mihomoMerge) {
         $.info(`指定合并 mihomo External: ${mihomoMerge}`);

@@ -14,6 +14,7 @@ export function safeDecodeURIComponent(value) {
 }
 
 export function parseBooleanStyleArgs(input) {
+    if (typeof input !== 'string') return {};
     const parsed = {};
     for (const pair of input.split('&')) {
         if (!pair) continue;
@@ -25,6 +26,11 @@ export function parseBooleanStyleArgs(input) {
 }
 
 export function parseArgumentString(input) {
+    if (typeof input !== 'string') {
+        return input && typeof input === 'object' && !Array.isArray(input)
+            ? { ...input }
+            : {};
+    }
     const parsed = {};
     for (const pair of input.split('&')) {
         if (!pair) continue;

@@ -2,6 +2,7 @@
 import { installConsoleLogCapture } from '@/utils/debug-logs';
 import getChildProcess from '@/runtime/child-process';
 import getFs from '@/runtime/fs';
+import { safeDecodeURIComponent } from '@/utils/parse';
 
 const isQX = typeof $task !== 'undefined';
 const isLoon = typeof $loon !== 'undefined';
@@ -36,29 +37,14 @@ function parseSocks5Uri(uri) {
         $.error(`port is not present in line: ${uri}`);
         throw new Error(`port is not present in line: ${uri}`);
     }
-    let userId;
-    if (username != null) {
-        try {
-            userId = decodeURIComponent(username);
-        } catch {
-            userId = username;
-        }
-    }
-    let passwordValue;
-    if (password != null) {
-        try {
-            passwordValue = decodeURIComponent(password);
-        } catch {
-            passwordValue = password;
-        }
-    }
     return {
         type: 5,
         host: server,
         port,
 
-        userId,
-        password: passwordValue,
+        userId: username != null ? safeDecodeURIComponent(username) : undefined,
+        password:
+            password != null ? safeDecodeURIComponent(password) : undefined,
     };
 }
 

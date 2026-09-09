@@ -1,9 +1,9 @@
-import { Base64 } from 'js-base64';
 import _ from 'lodash';
 import express from '@/vendor/express';
 import $ from '@/core/app';
 import migrate from '@/utils/migration';
 import download, { downloadFile } from '@/utils/download';
+import { parseBackupContent } from '@/utils/backup';
 import {
     syncArtifacts,
     produceArtifact,
@@ -492,30 +492,7 @@ export default function serve() {
             $.info(`[BACKEND] downloading data from ${data_url}`);
             download(data_url)
                 .then(async (content) => {
-                    try {
-                        content = JSON.parse(Base64.decode(content));
-                        if (!content.settings || typeof content.settings !== 'object') {
-                            throw new Error(
-                                '备份文件应该至少包含 settings 字段',
-                            );
-                        }
-                    } catch (err) {
-                        try {
-                            content = JSON.parse(content);
-                            if (!content.settings || typeof content.settings !== 'object') {
-                                throw new Error(
-                                    '备份文件应该至少包含 settings 字段',
-                                );
-                            }
-                        } catch (err) {
-                            $.error(
-                                `Gist 备份文件校验失败, 无法还原\nReason: ${
-                                    err.message ?? err
-                                }`,
-                            );
-                            throw new Error('Gist 备份文件校验失败, 无法还原');
-                        }
-                    }
+                    content = parseBackupContent(content);
                     if (data_url_post) {
                         $.info('[BACKEND] executing post-processing script');
                         eval(data_url_post);

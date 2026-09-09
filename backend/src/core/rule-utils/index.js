@@ -3,6 +3,20 @@ import RULE_PRODUCERS from './producers';
 import RULE_PARSERS from './parsers';
 import $ from '@/core/app';
 
+export function deduplicateRules(rules) {
+    const seen = new Set();
+    return rules.filter((rule) => {
+        const key = JSON.stringify([
+            rule.type,
+            rule.content,
+            rule.options ?? [],
+        ]);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
 export const RuleUtils = (function () {
     function preprocess(raw) {
         for (const processor of RULE_PREPROCESSORS) {

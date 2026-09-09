@@ -128,7 +128,7 @@ export default function express({ substore: $, port, host }) {
         'DELETE',
         'PATCH',
         'OPTIONS',
-        "HEAD",
+        'HEAD',
         'ALL',
     ];
 
@@ -136,14 +136,6 @@ export default function express({ substore: $, port, host }) {
     const dispatch = (request, start = 0) => {
         let { method, url, headers, body } = request;
         headers = formatHeaders(headers);
-        if (/json/i.test(headers['content-type'])) {
-            try {
-                body = JSON.parse(body);
-            } catch (e) {
-                // body 保持原始字符串
-            }
-        }
-
         method = method.toUpperCase();
         const { path, query } = extractURL(url);
         const cors = applyCors(headers.origin, method);
@@ -156,6 +148,23 @@ export default function express({ substore: $, port, host }) {
             const res = Response(cors.headers);
             res.status(200).end();
             return;
+        }
+
+        if (
+            start === 0 &&
+            typeof body === 'string' &&
+            /json/i.test(headers['content-type'])
+        ) {
+            try {
+                body = body.length === 0 ? {} : JSON.parse(body);
+            } catch {
+                const res = Response(cors.headers);
+                res.status(400).json({
+                    status: 'failed',
+                    message: 'Invalid JSON body',
+                });
+                return;
+            }
         }
 
         // pattern match
@@ -177,7 +186,10 @@ export default function express({ substore: $, port, host }) {
         if (handler) {
             // dispatch to next handler
             const next = () => {
-                dispatch({ method, url, headers, body }, handlerIndex + 1);
+                return dispatch(
+                    { method, url, headers, body },
+                    handlerIndex + 1,
+                );
             };
             const req = {
                 method,
@@ -269,6 +281,7 @@ export default function express({ substore: $, port, host }) {
             302: 'HTTP/1.1 302 Found',
             307: 'HTTP/1.1 307 Temporary Redirect',
             308: 'HTTP/1.1 308 Permanent Redirect',
+            400: 'HTTP/1.1 400 Bad Request',
             403: 'HTTP/1.1 403 Forbidden',
             404: 'HTTP/1.1 404 Not Found',
             500: 'HTTP/1.1 500 Internal Server Error',

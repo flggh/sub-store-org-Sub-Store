@@ -17,6 +17,7 @@ import Gist from '@/utils/gist';
 import migrate from '@/utils/migration';
 import env from '@/utils/env';
 import { formatDateTime } from '@/utils';
+import { parseBackupContent } from '@/utils/backup';
 import {
     AGE_SECRET_KEY,
     decryptArmorIfPresent,
@@ -53,27 +54,7 @@ export default function register($app) {
         })
         .post((req, res) => {
             try {
-                let { content } = req.body;
-                try {
-                    content = JSON.parse(Base64.decode(content));
-                    if (!content.settings || typeof content.settings !== 'object') {
-                        throw new Error('备份文件应该至少包含 settings 字段');
-                    }
-                } catch (err) {
-                    try {
-                        content = JSON.parse(content);
-                        if (!content.settings || typeof content.settings !== 'object') {
-                            throw new Error('备份文件应该至少包含 settings 字段');
-                        }
-                    } catch (err) {
-                        $.error(
-                            `备份文件校验失败, 无法还原\nReason: ${
-                                err.message ?? err
-                            }`,
-                        );
-                        throw new Error('备份文件校验失败, 无法还原');
-                    }
-                }
+                const content = parseBackupContent(req.body?.content);
                 $.write(JSON.stringify(content, null, `  `), '#sub-store');
                 if ($.env.isNode) {
                     $.cache = content;
@@ -90,8 +71,8 @@ export default function register($app) {
                 failed(
                     res,
                     new RequestInvalidError(
-                        'INVALID_BACKUP',
-                        `备份文件校验失败, 无法还原`,
+                        'INVALID_BACKUP_DATA',
+                        'Invalid backup data, failed to restore!',
                         `Reason: ${err.message ?? err}`,
                     ),
                 );
@@ -391,26 +372,7 @@ async function gistBackupAction(
                 settings,
                 encoding,
             );
-            try {
-                content = JSON.parse(Base64.decode(content));
-                if (!content.settings || typeof content.settings !== 'object') {
-                    throw new Error('备份文件应该至少包含 settings 字段');
-                }
-            } catch (err) {
-                try {
-                    content = JSON.parse(content);
-                    if (!content.settings || typeof content.settings !== 'object') {
-                        throw new Error('备份文件应该至少包含 settings 字段');
-                    }
-                } catch (err) {
-                    $.error(
-                        `Gist 备份文件校验失败, 无法还原\nReason: ${
-                            err.message ?? err
-                        }`,
-                    );
-                    throw new Error('Gist 备份文件校验失败, 无法还原');
-                }
-            }
+            content = parseBackupContent(content);
             const keepPaths = keep
                 ? String(keep)
                       .split(',')

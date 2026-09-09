@@ -50,6 +50,31 @@ describe('Loon resource parser', function () {
         });
     }
 
+    it('accepts object arguments from Loon', async function () {
+        const originalParse = ProxyUtils.parse;
+        const originalProduce = ProxyUtils.produce;
+        let capturedOptions;
+        try {
+            ProxyUtils.parse = () => [{ type: 'ss' }];
+            ProxyUtils.produce = (proxies, platform, type, options) => {
+                capturedOptions = options;
+                return 'object-argument-output';
+            };
+            expect(
+                await runParser({
+                    argument: { includeUnsupportedProxy: true },
+                    resource: 'fixture',
+                }),
+            ).to.equal('object-argument-output');
+            expect(capturedOptions['include-unsupported-proxy']).to.equal(true);
+        } finally {
+            ProxyUtils.parse = originalParse;
+            ProxyUtils.produce = originalProduce;
+            resetModule();
+            cleanupGlobals();
+        }
+    });
+
     it('does not auto-enable includeUnsupportedProxy from build number', async function () {
         const originalParse = ProxyUtils.parse;
         const originalProduce = ProxyUtils.produce;

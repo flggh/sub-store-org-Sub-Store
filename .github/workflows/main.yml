@@ -8,11 +8,6 @@ on:
       - master
     paths:
       - "backend/package.json"
-  pull_request:
-    branches:
-      - master
-    paths:
-      - "backend/package.json"
 concurrency:
   group: build
   cancel-in-progress: true

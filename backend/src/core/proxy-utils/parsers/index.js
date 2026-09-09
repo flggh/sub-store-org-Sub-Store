@@ -33,13 +33,7 @@ import {
 } from '../ech-utils';
 import { normalizeVmessSecurity } from '../vmess-security';
 
-// 只在第一个 = 处分割，保留值中的 = 字符（如 Base64 编码的 WireGuard 密钥）
-function splitKV(str) {
-    const idx = str.indexOf('=');
-    return idx >= 0
-        ? [str.substring(0, idx), str.substring(idx + 1)]
-        : [str];
-}
+import { splitKeyValuePair } from '@/utils/parse';
 
 function surge_port_hopping(raw) {
     const [parts, port_hopping] =
@@ -295,7 +289,7 @@ function URI_SS() {
         const params = {};
         for (const addon of query.replace(/^\?/, '').split('&')) {
             if (addon) {
-                const [key, valueRaw] = splitKV(addon);
+                const [key, valueRaw] = splitKeyValuePair(addon);
                 let value = valueRaw;
                 if (value !== undefined) {
                     value = decodeURIComponent(valueRaw);
@@ -442,7 +436,7 @@ function URI_SS() {
             ).split(';');
             const params = {};
             for (const item of pluginInfo) {
-                let [key, val] = splitKV(item);
+                let [key, val] = splitKeyValuePair(item);
                 if (val) val = val.replace(/\\=/g, '=');
                 if (key) params[key] = val || true; // some options like "tls" will not have value
             }
@@ -592,7 +586,7 @@ function URI_SSR() {
         line = queryPart ? queryPart.split('&') : [];
         if (line.length > 0) {
             for (const item of line) {
-                let [key, val] = splitKV(item);
+                let [key, val = ''] = splitKeyValuePair(item);
                 val = val.trim();
                 if (val.length > 0 && val !== '(null)') {
                     other_params[key] = val;
@@ -639,7 +633,7 @@ function URI_VMess() {
             const params = {};
             for (const part of partitions) {
                 if (part.indexOf('=') !== -1) {
-                    const [key, val] = splitKV(part);
+                    const [key, val] = splitKeyValuePair(part);
                     params[key.trim()] = val.trim();
                 }
             }
@@ -703,7 +697,7 @@ function URI_VMess() {
                 content = Base64.decode(base64Line);
 
                 for (const addon of qs.split('&')) {
-                    const [key, valueRaw] = splitKV(addon);
+                    const [key, valueRaw] = splitKeyValuePair(addon);
                     let value = valueRaw;
                     if (value !== undefined) {
                         value = decodeURIComponent(valueRaw);
@@ -1856,7 +1850,7 @@ function URI_VLESS() {
         const params = {};
         for (const addon of addons.split('&')) {
             if (addon) {
-                const [key, valueRaw] = splitKV(addon);
+                const [key, valueRaw] = splitKeyValuePair(addon);
                 let value = valueRaw;
                 if (value !== undefined) {
                     value = decodeURIComponent(valueRaw);
@@ -2147,7 +2141,7 @@ function URI_AnyTLS() {
 
         for (const addon of addons.split('&')) {
             if (addon) {
-                let [key, value] = splitKV(addon);
+                let [key, value] = splitKeyValuePair(addon);
                 key = key.replace(/_/g, '-');
                 if (value !== undefined) {
                     value = decodeURIComponent(value);
@@ -2233,7 +2227,7 @@ function URI_Hysteria2() {
         const params = {};
         for (const addon of addons.split('&')) {
             if (addon) {
-                const [key, valueRaw] = splitKV(addon);
+                const [key, valueRaw] = splitKeyValuePair(addon);
                 let value = valueRaw;
                 if (value !== undefined) {
                     value = decodeURIComponent(valueRaw);
@@ -2312,7 +2306,7 @@ function URI_Hysteria() {
         const params = {};
         for (const addon of addons.split('&')) {
             if (addon) {
-                let [key, value] = splitKV(addon);
+                let [key, value] = splitKeyValuePair(addon);
                 key = key.replace(/_/g, '-');
                 if (value !== undefined) {
                     value = decodeURIComponent(value);
@@ -2390,7 +2384,7 @@ function URI_TUIC() {
 
         for (const addon of addons.split('&')) {
             if (addon) {
-                let [key, value] = splitKV(addon);
+                let [key, value] = splitKeyValuePair(addon);
                 key = key.replace(/_/g, '-');
                 if (value !== undefined) {
                     value = decodeURIComponent(value);
@@ -2458,11 +2452,9 @@ function URI_WireGuard() {
         };
         for (const addon of addons.split('&')) {
             if (addon) {
-                let [key, value] = splitKV(addon);
+                let [key, value = ''] = splitKeyValuePair(addon);
                 key = key.replace(/_/g, '-');
-                if (value !== undefined) {
-                    value = decodeURIComponent(value);
-                }
+                value = decodeURIComponent(value);
                 if (['reserved'].includes(key)) {
                     const parsed = value
                         .split(',')

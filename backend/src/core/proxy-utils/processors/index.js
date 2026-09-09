@@ -36,38 +36,38 @@ function trimWrap(str) {
     }
     return str;
 }
-function deepMerge(target, _other) {
-    const other = typeof _other === 'string' ? JSON.parse(_other) : _other;
-    for (const key in other) {
-        // Only recurse into JSON-like patch objects. YAML can surface non-plain
-        // objects (for example timestamps), and those should be assigned as
-        // values instead of being treated as nested config maps.
-        if (isPlainObject(other[key])) {
-            if (key.endsWith('!')) {
-                const k = trimWrap(key.slice(0, -1));
-                target[k] = other[key];
-            } else {
-                const k = trimWrap(key);
-                if (target[k] == null) Object.assign(target, { [k]: {} });
-                deepMerge(target[k], other[k]);
-            }
-        } else if (Array.isArray(other[key])) {
-            if (key.startsWith('+')) {
-                const k = trimWrap(key.slice(1));
-                if (target[k] == null) Object.assign(target, { [k]: [] });
-                target[k] = [...other[key], ...target[k]];
-            } else if (key.endsWith('+')) {
-                const k = trimWrap(key.slice(0, -1));
-                if (target[k] == null) Object.assign(target, { [k]: [] });
-                target[k] = [...target[k], ...other[key]];
-            } else {
-                const k = trimWrap(key);
-                Object.assign(target, { [k]: other[key] });
-            }
-        } else {
-            const k = trimWrap(key);
-            Object.assign(target, { [k]: other[key] });
+function deepMerge(target, patch) {
+    const source = typeof patch === 'string' ? JSON.parse(patch) : patch;
+    for (const rawKey of Object.keys(source ?? {})) {
+        const value = source[rawKey];
+        const replace = isPlainObject(value) && rawKey.endsWith('!');
+        const prepend = Array.isArray(value) && rawKey.startsWith('+');
+        const append = Array.isArray(value) && !prepend && rawKey.endsWith('+');
+        const key = trimWrap(
+            prepend
+                ? rawKey.slice(1)
+                : replace || append
+                ? rawKey.slice(0, -1)
+                : rawKey,
+        );
+        const previous = Object.prototype.hasOwnProperty.call(target, key)
+            ? target[key]
+            : undefined;
+        let merged = value;
+        if (isPlainObject(value) && !replace) {
+            merged = deepMerge(isPlainObject(previous) ? previous : {}, value);
+        } else if (prepend || append) {
+            const previousList = Array.isArray(previous) ? previous : [];
+            merged = prepend
+                ? [...value, ...previousList]
+                : [...previousList, ...value];
         }
+        Object.defineProperty(target, key, {
+            value: merged,
+            enumerable: true,
+            configurable: true,
+            writable: true,
+        });
     }
     return target;
 }
@@ -354,6 +354,7 @@ function RegexSortOperator(input) {
                 if (oA && !oB) return -1;
                 if (oB && !oA) return 1;
                 if (oA && oB) return oA < oB ? -1 : oA > oB ? 1 : 0;
+                if (a.name === b.name) return 0;
                 if (order === 'original') {
                     return 0;
                 } else if (order === 'desc') {
@@ -451,7 +452,7 @@ function ScriptOperator(
                     if (typeof patch !== 'object')
                         throw new Error('patch is not an object');
                     output.$content = ProxyUtils.yaml.safeDump(
-                        deepMerge(config || {}, patch),
+                        deepMerge(isPlainObject(config) ? config : {}, patch),
                     );
                     return output;
                 } catch (e) {

@@ -17,6 +17,7 @@ import PROXY_PREPROCESSORS from '@/core/proxy-utils/preprocessors';
 import { ProxyUtils } from '@/core/proxy-utils';
 import { runBackendRequestTask } from '@/utils/request-concurrency';
 import getFs from '@/runtime/fs';
+import getPath from '@/runtime/path';
 import getStreamPromises from '@/runtime/stream-promises';
 import {
     AGE_SECRET_KEY,
@@ -324,11 +325,18 @@ export default async function download(
             );
             throw new Error(`无法加载 ${type}: ${url}`);
         }
-    } else if (url?.startsWith('/')) {
+    } else if (
+        url.startsWith('/') ||
+        (isNode && (getPath().isAbsolute(url) || /^file:/i.test(url)))
+    ) {
         try {
             const fs = getFs();
+            const localPath = url.split('#')[0];
             return formatPlainDownloadResult(
-                fs.readFileSync(url.split('#')[0], 'utf8'),
+                fs.readFileSync(
+                    /^file:/i.test(localPath) ? new URL(localPath) : localPath,
+                    'utf8',
+                ),
                 returnRaw,
             );
         } catch (err) {

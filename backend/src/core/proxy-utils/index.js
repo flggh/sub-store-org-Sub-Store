@@ -39,10 +39,6 @@ import {
 } from './producers/utils';
 import { doh } from '@/utils/dns';
 import JSON5 from 'json5';
-import {
-    safeDecodeURIComponent,
-    parseBooleanStyleArgs,
-} from '@/utils/parse';
 import { hex_md5 } from '@/vendor/md5';
 import SurgeMac_Producer from './producers/surgemac';
 
@@ -176,8 +172,10 @@ async function processFn(
         }
         if (item.disabled) {
             $.log(
-                `Skipping disabled operator: "${item.type
-                }" with arguments:\n >>> ${JSON.stringify(item.args, null, 2) || 'None'
+                `Skipping disabled operator: "${
+                    item.type
+                }" with arguments:\n >>> ${
+                    JSON.stringify(item.args, null, 2) || 'None'
                 }`,
             );
             continue;
@@ -198,7 +196,8 @@ async function processFn(
         }
 
         $.log(
-            `Applying "${item.type}" with arguments:\n >>> ${JSON.stringify(item.args, null, 2) || 'None'
+            `Applying "${item.type}" with arguments:\n >>> ${
+                JSON.stringify(item.args, null, 2) || 'None'
             }`,
         );
         let processor;

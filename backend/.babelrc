@@ -13,14 +13,11 @@
     },
     "plugins": [
         [
-            "babel-plugin-relative-path-import",
+            "module-resolver",
             {
-                "paths": [
-                    {
-                        "rootPathPrefix": "@",
-                        "rootPathSuffix": "src"
-                    }
-                ]
+                "alias": {
+                    "@": "./src"
+                }
             }
         ]
     ]

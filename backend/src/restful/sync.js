@@ -16,7 +16,7 @@ import {
 import { findByName, updateByName } from '@/utils/database';
 import download from '@/utils/download';
 import { ProxyUtils } from '@/core/proxy-utils';
-import { RuleUtils } from '@/core/rule-utils';
+import { deduplicateRules, RuleUtils } from '@/core/rule-utils';
 import {
     normalizeArtifactSyncBatchSize,
     syncToGist,
@@ -851,8 +851,8 @@ async function produceArtifact({
                 }% `,
             );
             try {
-                const { body } = await download(url);
-                const currentRules = RuleUtils.parse(body);
+                const content = await download(url);
+                const currentRules = RuleUtils.parse(content);
                 rules = rules.concat(currentRules);
             } catch (err) {
                 $.error(
@@ -861,15 +861,7 @@ async function produceArtifact({
             }
         }
         // remove duplicates
-        rules = rules.filter(
-            (rule, index, self) =>
-                index ===
-                self.findIndex(
-                    (r) =>
-                        r.type === rule.type &&
-                        r.content === rule.content,
-                ),
-        );
+        rules = deduplicateRules(rules);
         // produce output
         return RuleUtils.produce(rules, platform);
     } else if (type === 'file') {

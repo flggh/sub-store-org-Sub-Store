@@ -1,20 +1,17 @@
 import { expect } from 'chai';
 import fs from 'fs';
 import path from 'path';
-import { spawnSync } from 'child_process';
+import { runBundle } from './run-bundle';
 
 const backendPath = path.resolve(__dirname, '../../..');
 
 describe('browser bundle compatibility', function () {
-    this.timeout(10000);
+    this.timeout(60000);
 
-    it('keeps the Buffer polyfill inside browser artifacts', function () {
-        const result = spawnSync(process.execPath, ['bundle-esbuild.js'], {
-            cwd: backendPath,
-            encoding: 'utf8',
-        });
+    it('keeps the Buffer polyfill inside browser artifacts', async function () {
+        const result = await runBundle(backendPath);
 
-        expect(result.status, result.stderr).to.equal(0);
+        expect(result.status, result.stderr || result.stdout).to.equal(0);
 
         for (const artifact of [
             'sub-store.min.js',

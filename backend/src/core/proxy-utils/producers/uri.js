@@ -2,6 +2,7 @@
 import { Base64 } from 'js-base64';
 import $ from '@/core/app';
 import { isIPv6, isPlainObject } from '@/utils';
+import { splitKeyValuePair } from '@/utils/parse';
 import { getWireGuardAddressWithCIDR, normalizePluginMuxValue } from './utils';
 import {
     normalizeXhttpIntegerValue,
@@ -1499,9 +1500,7 @@ export default function URI_Producer() {
                     const queryString = urlParts[1].split('#')[0]; // Remove fragment if exists
                     const pairs = queryString.split('&');
                     pairs.forEach((pair) => {
-                        const eqIdx = pair.indexOf('=');
-                        const key = eqIdx === -1 ? pair : pair.substring(0, eqIdx);
-                        const value = eqIdx === -1 ? undefined : pair.substring(eqIdx + 1);
+                        const [key, value] = splitKeyValuePair(pair);
                         if (key) {
                             existingParams[key] = value;
                         }
@@ -1510,9 +1509,7 @@ export default function URI_Producer() {
 
                 // Merge anytlsParams with existing parameters
                 anytlsParams.forEach((param) => {
-                    const eqIdx = param.indexOf('=');
-                    const key = eqIdx === -1 ? param : param.substring(0, eqIdx);
-                    const value = eqIdx === -1 ? undefined : param.substring(eqIdx + 1);
+                    const [key, value] = splitKeyValuePair(param);
                     if (key) {
                         existingParams[key] = value;
                     }
