@@ -366,9 +366,6 @@ function trojan(proxy) {
     // tfo
     result.appendIfPresent(`,tfo=${proxy.tfo}`, 'tfo');
 
-    // udp
-    result.appendIfPresent(`,udp-relay=${proxy.udp}`, 'udp');
-
     // test-url
     result.appendIfPresent(`,test-url=${proxy['test-url']}`, 'test-url');
     result.appendIfPresent(
@@ -420,9 +417,6 @@ function anytls(proxy) {
 
     // tfo
     result.appendIfPresent(`,tfo=${proxy.tfo}`, 'tfo');
-
-    // udp
-    result.appendIfPresent(`,udp-relay=${proxy.udp}`, 'udp');
 
     // test-url
     result.appendIfPresent(`,test-url=${proxy['test-url']}`, 'test-url');
@@ -483,9 +477,6 @@ function trusttunnel(proxy) {
 
     // tfo
     result.appendIfPresent(`,tfo=${proxy.tfo}`, 'tfo');
-
-    // udp
-    result.appendIfPresent(`,udp-relay=${proxy.udp}`, 'udp');
 
     // test-url
     result.appendIfPresent(`,test-url=${proxy['test-url']}`, 'test-url');
@@ -548,7 +539,6 @@ function masque_surge(proxy) {
     } else if (isPresent(proxy, 'fast-open')) {
         result.append(`,tfo=${proxy['fast-open']}`);
     }
-    result.appendIfPresent(`,udp-relay=${proxy.udp}`, 'udp');
     result.appendIfPresent(`,test-url=${proxy['test-url']}`, 'test-url');
     result.appendIfPresent(
         `,test-timeout=${proxy['test-timeout']}`,
@@ -667,9 +657,6 @@ function vmess(proxy, includeUnsupportedProxy) {
     // tfo
     result.appendIfPresent(`,tfo=${proxy.tfo}`, 'tfo');
 
-    // udp
-    result.appendIfPresent(`,udp-relay=${proxy.udp}`, 'udp');
-
     // test-url
     result.appendIfPresent(`,test-url=${proxy['test-url']}`, 'test-url');
     result.appendIfPresent(
@@ -733,9 +720,6 @@ function ssh(proxy) {
     // tfo
     result.appendIfPresent(`,tfo=${proxy.tfo}`, 'tfo');
 
-    // udp
-    result.appendIfPresent(`,udp-relay=${proxy.udp}`, 'udp');
-
     // test-url
     result.appendIfPresent(`,test-url=${proxy['test-url']}`, 'test-url');
     result.appendIfPresent(
@@ -788,9 +772,6 @@ function http(proxy) {
     // tfo
     result.appendIfPresent(`,tfo=${proxy.tfo}`, 'tfo');
 
-    // udp
-    result.appendIfPresent(`,udp-relay=${proxy.udp}`, 'udp');
-
     // test-url
     result.appendIfPresent(`,test-url=${proxy['test-url']}`, 'test-url');
     result.appendIfPresent(
@@ -838,9 +819,6 @@ function direct(proxy) {
 
     // tfo
     result.appendIfPresent(`,tfo=${proxy.tfo}`, 'tfo');
-
-    // udp
-    result.appendIfPresent(`,udp-relay=${proxy.udp}`, 'udp');
 
     // test-url
     result.appendIfPresent(`,test-url=${proxy['test-url']}`, 'test-url');
@@ -994,9 +972,6 @@ function snell(proxy) {
 
     // tfo
     result.appendIfPresent(`,tfo=${proxy.tfo}`, 'tfo');
-
-    // udp
-    result.appendIfPresent(`,udp-relay=${proxy.udp}`, 'udp');
 
     // test-url
     result.appendIfPresent(`,test-url=${proxy['test-url']}`, 'test-url');

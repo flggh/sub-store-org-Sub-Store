@@ -936,6 +936,60 @@ describe('Proxy text producers', function () {
         );
     });
 
+    it('emits udp-relay only for applicable Surge policies', function () {
+        // https://manual.nssurge.com/policies/udp.html
+        const proxies = [
+            { type: 'ss', cipher: 'aes-128-gcm' },
+            { type: 'socks5' },
+            { type: 'socks5', tls: true },
+            { type: 'h2-connect' },
+            { type: 'external', exec: '/usr/bin/ssh', 'local-port': 1080 },
+            { type: 'http' },
+            { type: 'http', tls: true },
+            { type: 'trusttunnel' },
+            { type: 'ssh' },
+            { type: 'direct' },
+            { type: 'vmess', uuid: UUID },
+            { type: 'trojan' },
+            { type: 'anytls' },
+            { type: 'masque-surge' },
+            { type: 'tuic', token: 'secret' },
+            { type: 'tuic', uuid: UUID },
+            { type: 'hysteria2' },
+            { type: 'wireguard-surge', 'section-name': 'test' },
+            ...[1, 2, 3, 4, 5, 6].map((version) => ({
+                type: 'snell',
+                psk: 'secret',
+                version,
+            })),
+        ];
+
+        for (const platform of ['Surge', 'SurgeMac']) {
+            for (const proxy of proxies) {
+                if (proxy.type === 'external' && platform === 'Surge') continue;
+                for (const udp of [true, false, undefined]) {
+                    const output = produceExternal(platform, {
+                        name: proxy.type,
+                        server: 'example.com',
+                        port: 443,
+                        password: 'secret',
+                        ...proxy,
+                        udp,
+                    });
+                    const expected =
+                        ['ss', 'socks5', 'h2-connect', 'external'].includes(
+                            proxy.type,
+                        ) && udp != null
+                            ? [`,udp-relay=${udp}`]
+                            : [];
+
+                    expect(output.match(/,udp-relay=[^,\n]+/g) || [], output)
+                        .to.deep.equal(expected);
+                }
+            }
+        }
+    });
+
     it('emits Surge alpn and server-cert-verify-name for TLS protocol outputs', function () {
         const alpn = ['http/1.1', 'h2', 'h3'];
         const nameCertVerify = 'verify.example.com';
@@ -1090,7 +1144,7 @@ describe('Proxy text producers', function () {
             ecn: false,
         });
         expect(produceExternal('Surge', proxy)).to.equal(
-            'Surge MASQUE=masque,masque.example.com,443,username="user",password="secret",port-hopping="8443;8445-8447",port-hopping-interval=30,sni="sni.example.com",alpn="h3",skip-cert-verify=true,udp-relay=false,ecn=false',
+            'Surge MASQUE=masque,masque.example.com,443,username="user",password="secret",port-hopping="8443;8445-8447",port-hopping-interval=30,sni="sni.example.com",alpn="h3",skip-cert-verify=true,ecn=false',
         );
     });
 
@@ -1262,8 +1316,8 @@ describe('Proxy text producers', function () {
 
         expect(output).to.equal(
             [
-                'Surge Snell v6=snell,snell.example.com,443,version=6,psk="secret",mode=unsafe-raw,udp-relay=true',
-                'Surge Snell v5 Mode=snell,snell.example.com,443,version=5,psk="secret",udp-relay=true',
+                'Surge Snell v6=snell,snell.example.com,443,version=6,psk="secret",mode=unsafe-raw',
+                'Surge Snell v5 Mode=snell,snell.example.com,443,version=5,psk="secret"',
             ].join('\n'),
         );
         expect(errors).to.deep.equal([
@@ -1523,7 +1577,7 @@ describe('Proxy text producers', function () {
 
         expect(output.split('\n')).to.deep.equal([
             `Surge H2 Round Trip=h2-connect,h2.example.com,443,headers="X-Padding:"<random-string(16-32)>"",max-streams=1,sni="sni.example.com",udp-relay=true`,
-            `Surge Trust Round Trip=trust-tunnel,trust.example.com,443,username="user",password="pass",headers="X-Client:"Surge"",max-streams=3,sni="sni.example.com",udp-relay=true`,
+            `Surge Trust Round Trip=trust-tunnel,trust.example.com,443,username="user",password="pass",headers="X-Client:"Surge"",max-streams=3,sni="sni.example.com"`,
         ]);
     });
 
