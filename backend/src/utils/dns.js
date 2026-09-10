@@ -1,3 +1,4 @@
+/* global $dns */
 import $ from '@/core/app';
 import dnsPacket from 'dns-packet';
 import getDgram from '@/runtime/dgram';
@@ -312,14 +313,57 @@ export async function resolveDns({
     skipCertVerify,
 }) {
     const raw = `${url || ''}`.trim();
-    const protocol = raw.match(/^([a-z][a-z\d+.-]*):\/\//i)?.[1];
+    const protocol = raw.match(/^([a-z][a-z\d+.-]*):\/\//i)?.[1].toLowerCase();
+    const isDoh = ['http', 'https'].includes(protocol);
+    if (
+        !$.env.isLoon &&
+        (['auto', 'system'].includes(raw.toLowerCase()) ||
+            ['h3', 'quic'].includes(protocol))
+    ) {
+        throw new Error('auto/system 和 DoH3/DoQ 仅支持 Loon Build ≥ 988');
+    }
+    if (
+        $.env.isLoon &&
+        raw &&
+        (!protocol || ['udp', 'h3', 'quic'].includes(protocol))
+    ) {
+        if (typeof $dns === 'undefined' || typeof $dns?.query !== 'function') {
+            throw new Error('Loon DNS API 需要 Loon Build ≥ 988');
+        }
+        const server = raw.replace(/^udp:\/\//i, '');
+        const result = await new Promise((resolve, reject) => {
+            $dns.query(
+                {
+                    domain,
+                    ...(raw.toLowerCase() === 'auto' ? {} : { server }),
+                    timeout: normalizeDnsTimeout(timeout),
+                },
+                (error, response) => {
+                    if (error) {
+                        reject(Object.assign(new Error(error.message), error));
+                    } else {
+                        resolve(response);
+                    }
+                },
+            );
+        });
+        return {
+            ...result,
+            answers: result.answers?.map(({ value, ...answer }) => ({
+                ...answer,
+                data: value,
+            })),
+        };
+    }
     if (
         raw &&
         !$.env.isNode &&
-        !/^https?:\/\//i.test(raw) &&
-        (!protocol || ['udp', 'tcp', 'tls'].includes(protocol.toLowerCase()))
+        !isDoh &&
+        (!protocol || ['udp', 'tcp', 'tls'].includes(protocol))
     ) {
-        throw new Error('DoT 和 TCP/UDP DNS 仅支持 Node.js 环境');
+        throw new Error(
+            'DoT 和 TCP DNS 仅支持 Node.js; UDP DNS 支持 Node.js 或 Loon Build ≥ 988',
+        );
     }
 
     const resolver = parseDnsResolver(url);
@@ -335,7 +379,9 @@ export async function resolveDns({
     }
 
     if (!$.env.isNode) {
-        throw new Error('DoT 和 TCP/UDP DNS 仅支持 Node.js 环境');
+        throw new Error(
+            'DoT 和 TCP DNS 仅支持 Node.js; UDP DNS 支持 Node.js 或 Loon Build ≥ 988',
+        );
     }
 
     if (['tcp', 'tls'].includes(resolver.protocol)) {
