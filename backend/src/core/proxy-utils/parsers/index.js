@@ -2570,6 +2570,7 @@ function Clash_All() {
                 'gost-relay',
                 'openvpn',
                 'tailscale',
+                'easytier',
                 'trusttunnel',
                 'h2-connect',
                 'naive',
